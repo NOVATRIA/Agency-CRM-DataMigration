@@ -1,0 +1,4 @@
+﻿# Local ignore rules
+.clasp.json
+
+*.gscript

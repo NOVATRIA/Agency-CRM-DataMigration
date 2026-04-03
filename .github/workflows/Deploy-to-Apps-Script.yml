@@ -1,0 +1,29 @@
+﻿name: Deploy to Apps Script
+
+on:
+  workflow_dispatch:
+    inputs:
+      description:
+        description: "Mô tả phiên bản"
+        required: false
+        default: "DataMigration Update"
+
+jobs:
+  deploy-datamigration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install -g @google/clasp
+      - name: Setup clasp auth
+        run: echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+      - name: Setup DataMigration project
+        run: |
+          echo '{"scriptId":"${{ secrets.SCRIPT_ID }}","rootDir":"."}' > .clasp.json
+      - name: Push then Deploy DataMigration
+        run: |
+          clasp push --force
+          clasp deploy -i "${{ secrets.DEPLOY_ID }}" -d "${{ github.event.inputs.description }}"
+
