@@ -16,7 +16,10 @@ jobs:
       - name: Setup clasp auth
         env:
           CLASPRC: ${{ secrets.CLASPRC_JSON }}
-        run: echo "$CLASPRC" > ~/.clasprc.json
+        run: |
+          echo "$CLASPRC" > ~/.clasprc.json
+          echo "clasprc.json size: $(wc -c < ~/.clasprc.json) bytes"
+          echo "Has tokens key: $(grep -c '"tokens"' ~/.clasprc.json || echo 'NO')"
       - name: Setup DataMigration project
         run: |
           echo '{"scriptId":"${{ secrets.SCRIPT_ID }}","rootDir":"."}' > .clasp.json
