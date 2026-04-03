@@ -1130,8 +1130,35 @@ function _writeErrors() {
     sheet.setFrozenRows(1);
   }
 
+  // Đọc lỗi đã có trong Error_Log để không ghi trùng giữa các lần chạy
+  var seen = {};
+  var existingData = sheet.getDataRange().getValues();
+  for (var i = 1; i < existingData.length; i++) {
+    var existKey = [
+      existingData[i][1] || '',  // tab
+      existingData[i][2] || '',  // dong
+      existingData[i][4] || ''   // gia_tri
+    ].join('|');
+    seen[existKey] = true;
+  }
+
+  // Lọc: chỉ giữ lỗi chưa từng ghi
+  var newErrors = [];
+  _errors.forEach(function(e) {
+    var key = [e.tab || '', e.dong || '', e.gia_tri || ''].join('|');
+    if (!seen[key]) {
+      seen[key] = true;
+      newErrors.push(e);
+    }
+  });
+
+  if (newErrors.length === 0) {
+    Logger.log('Không có lỗi mới — bỏ qua ghi Error_Log');
+    return;
+  }
+
   var now = new Date();
-  var rows = _errors.map(function(e) {
+  var rows = newErrors.map(function(e) {
     return [
       now,
       e.tab || '',
@@ -1144,7 +1171,7 @@ function _writeErrors() {
 
   var lastRow = sheet.getLastRow();
   sheet.getRange(lastRow + 1, 1, rows.length, rows[0].length).setValues(rows);
-  Logger.log('Đã ghi ' + rows.length + ' lỗi vào Error_Log');
+  Logger.log('Đã ghi ' + newErrors.length + ' lỗi mới vào Error_Log (bỏ qua ' + (_errors.length - newErrors.length) + ' trùng)');
 }
 
 // ============================================================
