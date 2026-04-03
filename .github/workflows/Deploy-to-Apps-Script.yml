@@ -18,7 +18,9 @@ jobs:
           node-version: 20
       - run: npm install -g @google/clasp
       - name: Setup clasp auth
-        run: echo '${{ secrets.CLASPRC_JSON }}' > ~/.clasprc.json
+        env:
+          CLASPRC: ${{ secrets.CLASPRC_JSON }}
+        run: echo "$CLASPRC" > ~/.clasprc.json
       - name: Setup DataMigration project
         run: |
           echo '{"scriptId":"${{ secrets.SCRIPT_ID }}","rootDir":"."}' > .clasp.json
