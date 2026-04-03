@@ -11,6 +11,8 @@
  *   3. So sánh với CRM Database → chỉ thêm dòng mới (dedup)
  *   4. Tính lại quỹ KH cho các KH có GD mới
  *   5. Ghi log + lỗi vào 1-Database/Logs/MigrationLogs
+ *
+ * Version: 2.0 — Config từ Script Properties + Google Sheet
  */
 
 // ============================================================
