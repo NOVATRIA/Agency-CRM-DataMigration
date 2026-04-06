@@ -181,47 +181,43 @@ function resetAndRebuild() {
   // 1. Xoá Kho_TaiKhoan (data rows)
   _clearSheetData_(crmIds, 'KHO_TK', 'Kho_TaiKhoan');
 
-  // 2. Xoá DoiSoat_GD (data rows)
+  // 2. Xoá GD_KhachHang (data rows — sync lại toàn bộ từ nguồn)
+  _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'GD_KhachHang');
+
+  // 3. Xoá DoiSoat_GD (data rows)
   _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'DoiSoat_GD');
 
-  // 3. GD_KhachHang: xoá 3 cột quỹ (I, J, K) — KHÔNG xoá dòng
-  _clearColumns_(crmIds, 'GD_KH_' + NAM, 'GD_KhachHang', [9, 10, 11]); // 1-based: I=9, J=10, K=11
-
-  // 4. GD_NhaCungCap: xoá 3 cột đối soát + 3 cột quỹ
-  var ssNCC = _openCrm_(crmIds, 'GD_NCC_' + NAM);
-  var sheetGDNCC = ssNCC.getSheetByName('GD_NhaCungCap');
-  if (sheetGDNCC && sheetGDNCC.getLastRow() > 1) {
-    var headers = sheetGDNCC.getRange(1, 1, 1, sheetGDNCC.getLastColumn()).getValues()[0];
-    var colsToClear = [];
-    // Tìm cột theo tên header
-    var clearNames = ['quy_truoc', 'bien_dong', 'quy_sau', 'trang_thai_doi_soat', 'nguoi_doi_soat', 'ngay_doi_soat'];
-    headers.forEach(function(h, idx) {
-      if (clearNames.indexOf(h) >= 0) colsToClear.push(idx + 1); // 1-based
-    });
-    var lastRow = sheetGDNCC.getLastRow();
-    colsToClear.forEach(function(col) {
-      sheetGDNCC.getRange(2, col, lastRow - 1, 1).clearContent();
-    });
-    Logger.log('GD_NhaCungCap: xoá ' + colsToClear.length + ' cột (' + (lastRow - 1) + ' dòng)');
-  }
+  // 4. Xoá GD_NhaCungCap (data rows — sync lại toàn bộ từ nguồn)
+  _clearSheetData_(crmIds, 'GD_NCC_' + NAM, 'GD_NhaCungCap');
 
   // 5. DanhMuc_KH: reset quy_hien_tai (D) + quy_goc (E) về 0
   var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
   var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
   if (sheetKH && sheetKH.getLastRow() > 1) {
-    var rows = sheetKH.getLastRow() - 1;
-    var zeros = [];
-    for (var i = 0; i < rows; i++) zeros.push([0, 0]);
-    sheetKH.getRange(2, 4, rows, 2).setValues(zeros); // cột D + E
-    Logger.log('DanhMuc_KH: reset quy_hien_tai + quy_goc cho ' + rows + ' KH');
+    var rowsKH = sheetKH.getLastRow() - 1;
+    var zerosKH = [];
+    for (var i = 0; i < rowsKH; i++) zerosKH.push([0, 0]);
+    sheetKH.getRange(2, 4, rowsKH, 2).setValues(zerosKH); // cột D + E
+    Logger.log('DanhMuc_KH: reset quy_hien_tai + quy_goc cho ' + rowsKH + ' KH');
   }
 
-  // 6. Reset mã GD counter
+  // 6. DanhMuc_NCC: reset quy_hien_tai (cột L = 12) về 0
+  var ssNCC = _openCrm_(crmIds, 'NHA_CUNG_CAP');
+  var sheetNCC = ssNCC.getSheetByName('DanhMuc_NCC');
+  if (sheetNCC && sheetNCC.getLastRow() > 1) {
+    var rowsNCC = sheetNCC.getLastRow() - 1;
+    var zerosNCC = [];
+    for (var j = 0; j < rowsNCC; j++) zerosNCC.push([0]);
+    sheetNCC.getRange(2, 12, rowsNCC, 1).setValues(zerosNCC); // cột L
+    Logger.log('DanhMuc_NCC: reset quy_hien_tai cho ' + rowsNCC + ' NCC');
+  }
+
+  // 7. Reset mã GD counter
   _maGdCounters = {};
 
   Logger.log('=== RESET XONG — Bắt đầu buildAll() ===');
 
-  // 7. Chạy buildAll() để sync lại từ nguồn
+  // 8. Chạy buildAll() để sync lại từ nguồn
   buildAll();
 }
 
