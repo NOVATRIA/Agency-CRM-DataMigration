@@ -1314,19 +1314,43 @@ function _readQuyGoc() {
   var data = sheet.getDataRange().getValues();
   if (data.length <= 5) return {};
 
-  // Cột D = index 3 (Mã KH), Cột IH = index _colNameToIndex('IH')
-  var colMaKH = 3; // D = index 3
+  // Cột D = index 3 (Mã KH), Cột E = index 4 (TT Nạp/Rút), Cột F = index 5 (TT Mua TK)
+  var colMaKH = 3;       // D
+  var colTTNapRut = 4;   // E — Trạng thái Nạp/Rút
+  var colTTMuaTK = 5;    // F — Trạng thái Mua tài khoản
   var colQuyGoc = _colNameToIndex(COL_QUY_GOC);
 
+  // Tìm cột quỹ ngày mới nhất (dùng để check quỹ = 0)
+  var headerRow = data[1]; // dòng 2 chứa ngày
+  var lastDateCol = colQuyGoc; // mặc định dùng cột quỹ gốc
+  for (var c = 6; c < headerRow.length; c++) {
+    var val = headerRow[c];
+    if (val instanceof Date && !isNaN(val.getTime())) lastDateCol = c;
+    else if (val && val.toString().match(/^\d{2}\/\d{2}\/\d{4}$/)) lastDateCol = c;
+  }
+
   var map = {};
+  var skipped = 0;
   for (var i = 5; i < data.length; i++) { // data bắt đầu từ dòng 6 (index 5)
     var maKH = (data[i][colMaKH] || '').toString().trim();
     if (!maKH || !MA_KH_REGEX.test(maKH)) continue;
+
+    // Bỏ qua KH không hoạt động + quỹ hiện tại = 0
+    var ttNapRut = (data[i][colTTNapRut] || '').toString().trim().toLowerCase();
+    var ttMuaTK = (data[i][colTTMuaTK] || '').toString().trim().toLowerCase();
+    var quyHienTai = parseFloat(data[i][lastDateCol]) || 0;
+
+    var khongHoatDong = ttNapRut.indexOf('không') >= 0 && ttMuaTK.indexOf('không') >= 0;
+    if (khongHoatDong && quyHienTai === 0) {
+      skipped++;
+      continue;
+    }
+
     var quyGoc = parseFloat(data[i][colQuyGoc]) || 0;
     map[maKH] = quyGoc;
   }
 
-  Logger.log('Quỹ gốc: đọc ' + Object.keys(map).length + ' KH từ cột ' + COL_QUY_GOC);
+  Logger.log('Quỹ gốc: đọc ' + Object.keys(map).length + ' KH, bỏ qua ' + skipped + ' KH không hoạt động');
   return map;
 }
 
@@ -1385,12 +1409,20 @@ function _doiChieuQuy(crmIds) {
     return;
   }
 
-  // Đọc quỹ kế toán theo KH
+  // Đọc quỹ kế toán theo KH (bỏ qua KH không hoạt động + quỹ = 0)
+  var colTTNapRut = 4;   // E
+  var colTTMuaTK = 5;    // F
   var ketoanMap = {};
   for (var i = 5; i < data.length; i++) {
     var maKH = (data[i][colMaKH] || '').toString().trim();
     if (!maKH || !MA_KH_REGEX.test(maKH)) continue;
-    ketoanMap[maKH] = parseFloat(data[i][lastDateCol]) || 0;
+
+    var ttNR = (data[i][colTTNapRut] || '').toString().trim().toLowerCase();
+    var ttMT = (data[i][colTTMuaTK] || '').toString().trim().toLowerCase();
+    var quyVal = parseFloat(data[i][lastDateCol]) || 0;
+    if (ttNR.indexOf('không') >= 0 && ttMT.indexOf('không') >= 0 && quyVal === 0) continue;
+
+    ketoanMap[maKH] = quyVal;
   }
 
   // Đọc quỹ CRM
