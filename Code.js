@@ -164,6 +164,96 @@ function buildAll() {
 }
 
 // ============================================================
+// RESET & REBUILD — Xoá GD + Kho + Đối Soát → sync lại từ đầu
+// ============================================================
+
+/**
+ * Xoá toàn bộ data trong các sheet CRM rồi chạy buildAll() để sync lại từ nguồn.
+ * Dùng khi kế toán đã sửa GD trên sheet nguồn (Topup / Đối chiếu) và cần CRM khớp lại.
+ *
+ * CẢNH BÁO: Hàm này xoá data — chỉ nên chạy thủ công, KHÔNG đặt trigger tự động.
+ */
+function resetAndRebuild() {
+  var crmIds = _loadCrmIds_();
+
+  Logger.log('=== RESET & REBUILD — Bắt đầu xoá data CRM ===');
+
+  // 1. Xoá Kho_TaiKhoan (data rows)
+  _clearSheetData_(crmIds, 'KHO_TK', 'Kho_TaiKhoan');
+
+  // 2. Xoá DoiSoat_GD (data rows)
+  _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'DoiSoat_GD');
+
+  // 3. GD_KhachHang: xoá 3 cột quỹ (I, J, K) — KHÔNG xoá dòng
+  _clearColumns_(crmIds, 'GD_KH_' + NAM, 'GD_KhachHang', [9, 10, 11]); // 1-based: I=9, J=10, K=11
+
+  // 4. GD_NhaCungCap: xoá 3 cột đối soát + 3 cột quỹ
+  var ssNCC = _openCrm_(crmIds, 'GD_NCC_' + NAM);
+  var sheetGDNCC = ssNCC.getSheetByName('GD_NhaCungCap');
+  if (sheetGDNCC && sheetGDNCC.getLastRow() > 1) {
+    var headers = sheetGDNCC.getRange(1, 1, 1, sheetGDNCC.getLastColumn()).getValues()[0];
+    var colsToClear = [];
+    // Tìm cột theo tên header
+    var clearNames = ['quy_truoc', 'bien_dong', 'quy_sau', 'trang_thai_doi_soat', 'nguoi_doi_soat', 'ngay_doi_soat'];
+    headers.forEach(function(h, idx) {
+      if (clearNames.indexOf(h) >= 0) colsToClear.push(idx + 1); // 1-based
+    });
+    var lastRow = sheetGDNCC.getLastRow();
+    colsToClear.forEach(function(col) {
+      sheetGDNCC.getRange(2, col, lastRow - 1, 1).clearContent();
+    });
+    Logger.log('GD_NhaCungCap: xoá ' + colsToClear.length + ' cột (' + (lastRow - 1) + ' dòng)');
+  }
+
+  // 5. DanhMuc_KH: reset quy_hien_tai (D) + quy_goc (E) về 0
+  var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
+  var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
+  if (sheetKH && sheetKH.getLastRow() > 1) {
+    var rows = sheetKH.getLastRow() - 1;
+    var zeros = [];
+    for (var i = 0; i < rows; i++) zeros.push([0, 0]);
+    sheetKH.getRange(2, 4, rows, 2).setValues(zeros); // cột D + E
+    Logger.log('DanhMuc_KH: reset quy_hien_tai + quy_goc cho ' + rows + ' KH');
+  }
+
+  // 6. Reset mã GD counter
+  _maGdCounters = {};
+
+  Logger.log('=== RESET XONG — Bắt đầu buildAll() ===');
+
+  // 7. Chạy buildAll() để sync lại từ nguồn
+  buildAll();
+}
+
+/**
+ * Xoá tất cả data rows (giữ header) của 1 sheet
+ */
+function _clearSheetData_(crmIds, configKey, sheetName) {
+  var ss = _openCrm_(crmIds, configKey);
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) { Logger.log('WARNING: Không tìm thấy ' + sheetName); return; }
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) { Logger.log(sheetName + ': đã trống'); return; }
+  sheet.deleteRows(2, lastRow - 1);
+  Logger.log(sheetName + ': xoá ' + (lastRow - 1) + ' dòng');
+}
+
+/**
+ * Xoá giá trị các cột chỉ định từ dòng 2 trở xuống (giữ dòng nguyên)
+ */
+function _clearColumns_(crmIds, configKey, sheetName, columns) {
+  var ss = _openCrm_(crmIds, configKey);
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return;
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return;
+  columns.forEach(function(col) {
+    sheet.getRange(2, col, lastRow - 1, 1).clearContent();
+  });
+  Logger.log(sheetName + ': xoá ' + columns.length + ' cột (' + (lastRow - 1) + ' dòng)');
+}
+
+// ============================================================
 // SINH MÃ GD — Format: {prefix}-YYYYMMDD-NNN
 // ============================================================
 
