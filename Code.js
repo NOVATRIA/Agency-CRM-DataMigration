@@ -234,7 +234,12 @@ function _clearSheetData_(crmIds, configKey, sheetName) {
   if (!sheet) { Logger.log('WARNING: Không tìm thấy ' + sheetName); return; }
   var lastRow = sheet.getLastRow();
   if (lastRow <= 1) { Logger.log(sheetName + ': đã trống'); return; }
-  sheet.deleteRows(2, lastRow - 1);
+  // Dùng clearContent thay deleteRows để tránh lỗi frozen rows
+  sheet.getRange(2, 1, lastRow - 1, sheet.getLastColumn()).clearContent();
+  // Xoá dòng thừa (giữ lại 1 dòng trống sau header để tránh lỗi)
+  if (lastRow > 2) {
+    try { sheet.deleteRows(3, lastRow - 2); } catch(e) { /* bỏ qua nếu không xoá được */ }
+  }
   Logger.log(sheetName + ': xoá ' + (lastRow - 1) + ' dòng');
 }
 
