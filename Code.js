@@ -83,6 +83,44 @@ function _openCrm_(crmIds, key) {
 }
 
 // ============================================================
+// WEB APP — Admin actions via doGet
+// ============================================================
+
+function doGet(e) {
+  var action = (e && e.parameter && e.parameter.action) || '';
+  var token = (e && e.parameter && e.parameter.admin_token) || '';
+  var expectedToken = _readCauHinh('ADMIN_TOKEN');
+
+  if (!expectedToken || token !== expectedToken) {
+    return ContentService.createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+
+  try {
+    if (action === 'auditAll') {
+      auditAll();
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'auditAll() completed. Check MigrationLogs/Audit_Log' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    if (action === 'resetAndRebuild') {
+      resetAndRebuild();
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild() completed.' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    if (action === 'buildAll') {
+      buildAll();
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'buildAll() completed.' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ error: 'Unknown action: ' + action }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({ error: err.message, stack: err.stack }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+// ============================================================
 // MAIN
 // ============================================================
 
