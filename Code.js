@@ -28,8 +28,14 @@ var TAB_TOPUP  = 'Topup';
 var TAB_DOI_CHIEU = 'Đối chiếu T.chính';
 var TAB_TK_KHO = 'TK trong kho';
 
-// Chỉ lấy GD từ ngày này trở đi
-var DATE_FROM = new Date(2026, 0, 1); // 01/01/2026
+// ── CẤU HÌNH NGÀY ──────────────────────────────────────────
+// Chỉ lấy GD từ ngày này trở đi (đổi ở đây khi muốn mở rộng phạm vi)
+var DATE_FROM = new Date(2026, 3, 1); // 01/04/2026 (tháng 0-indexed: 3 = tháng 4)
+
+// Cột quỹ gốc trong tab "Tổng hợp" — ngày cuối trước DATE_FROM
+// 31/03/2026 → tìm tự động trong code, không cần hardcode index
+var QUY_GOC_DATE = new Date(2026, 2, 31); // 31/03/2026
+// ────────────────────────────────────────────────────────────
 
 // Mã KH đặc biệt = GD NCC → bỏ qua
 var NCC_MA_KH = [
@@ -88,10 +94,13 @@ function _openCrm_(crmIds, key) {
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || '';
-  // Nếu chạy từ editor (không có param), default chạy auditKHDetail
+  // Nếu chạy từ editor (không có param), default chạy resetAndRebuild + audit
   if (!action) {
+    resetAndRebuild();
+    auditAll();
+    readAuditSummary();
     auditKHDetail();
-    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'auditKHDetail done. Check KH_Detail tab.' }))
+    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild + audit done.' }))
       .setMimeType(ContentService.MimeType.JSON);
   }
   // Token check: bỏ qua nếu ADMIN_TOKEN chưa set trong CauHinh
@@ -1375,21 +1384,32 @@ function _readTKTrongKho() {
 // ============================================================
 
 var TAB_TONG_HOP = 'Tổng hợp';
-var COL_QUY_GOC = 'IH'; // Cột 31/12/2025
 
 /**
- * Chuyển tên cột (VD: "IH") thành index 0-based
+ * Tìm index cột có ngày khớp targetDate trong dòng header (dòng 2)
+ * Trả về index (0-based) hoặc -1 nếu không tìm thấy
  */
-function _colNameToIndex(name) {
-  var result = 0;
-  for (var i = 0; i < name.length; i++) {
-    result = result * 26 + (name.charCodeAt(i) - 64);
+function _findDateCol(headerRow, targetDate) {
+  var targetTime = targetDate.getTime();
+  for (var c = 6; c < headerRow.length; c++) {
+    var val = headerRow[c];
+    var d = null;
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      d = val;
+    } else if (val) {
+      d = _parseDate(val.toString().trim());
+    }
+    if (d && d.getFullYear() === targetDate.getFullYear()
+        && d.getMonth() === targetDate.getMonth()
+        && d.getDate() === targetDate.getDate()) {
+      return c;
+    }
   }
-  return result - 1; // 0-based
+  return -1;
 }
 
 /**
- * Đọc quỹ gốc từ tab "Tổng hợp" cột IH (31/12/2025)
+ * Đọc quỹ gốc từ tab "Tổng hợp" — cột tương ứng QUY_GOC_DATE
  * Trả về { ma_kh: quy_goc }
  */
 function _readQuyGoc() {
@@ -1403,22 +1423,18 @@ function _readQuyGoc() {
   var data = sheet.getDataRange().getValues();
   if (data.length <= 5) return {};
 
-  // Cột D = index 3 (Mã KH), Cột E = index 4 (TT Nạp/Rút), Cột F = index 5 (TT Mua TK)
-  var colMaKH = 3;       // D
-  var colTTNapRut = 4;   // E — Trạng thái Nạp/Rút
-  var colTTMuaTK = 5;    // F — Trạng thái Mua tài khoản
-  var colQuyGoc = _colNameToIndex(COL_QUY_GOC);
-
-  // Tìm cột quỹ ngày mới nhất (dùng để check quỹ = 0)
+  var colMaKH = 3; // D
   var headerRow = data[1]; // dòng 2 chứa ngày
-  var lastDateCol = colQuyGoc; // mặc định dùng cột quỹ gốc
-  for (var c = 6; c < headerRow.length; c++) {
-    var val = headerRow[c];
-    if (val instanceof Date && !isNaN(val.getTime())) lastDateCol = c;
-    else if (val && val.toString().match(/^\d{2}\/\d{2}\/\d{4}$/)) lastDateCol = c;
-  }
 
-  // Đọc tất cả KH có mã hợp lệ — _importQuyGoc chỉ ghi cho KH đã có trong CRM
+  // Tìm cột quỹ gốc theo QUY_GOC_DATE
+  var colQuyGoc = _findDateCol(headerRow, QUY_GOC_DATE);
+  if (colQuyGoc < 0) {
+    Logger.log('WARNING: Không tìm thấy cột ngày ' + Utilities.formatDate(QUY_GOC_DATE, TZ, 'dd/MM/yyyy') + ' trong Tổng hợp');
+    return {};
+  }
+  Logger.log('Quỹ gốc: cột ' + colQuyGoc + ' = ' + Utilities.formatDate(QUY_GOC_DATE, TZ, 'dd/MM/yyyy'));
+
+  // Đọc tất cả KH có mã hợp lệ
   var map = {};
   for (var i = 5; i < data.length; i++) {
     var maKH = _fixMaKH((data[i][colMaKH] || '').toString().trim());
@@ -1470,7 +1486,12 @@ function _importQuyGocNCC(crmIds, nccMap) {
   if (data.length <= 3) return;
 
   var colTenNguon = 1; // B
-  var colQuyGocNCC = _colNameToIndex(COL_QUY_GOC_NCC); // HZ
+  // Tab Nguồn: dòng 1 (index 0) chứa ngày
+  var colQuyGocNCC = _findDateCol(data[0], QUY_GOC_DATE);
+  if (colQuyGocNCC < 0) {
+    Logger.log('WARNING: Không tìm thấy cột ngày ' + Utilities.formatDate(QUY_GOC_DATE, TZ, 'dd/MM/yyyy') + ' trong tab Nguồn');
+    return {};
+  }
 
   // Đọc quỹ gốc theo tên NCC → map sang mã NCC
   var quyGocMap = {}; // { ma_ncc: quy_goc }
@@ -1650,7 +1671,7 @@ function _doiChieuQuy(crmIds) {
 // ============================================================
 
 var TAB_NGUON = 'Nguồn';
-var COL_QUY_GOC_NCC = 'HZ'; // Cột 31/12/2025 trong tab Nguồn
+// COL_QUY_GOC_NCC: tìm tự động theo QUY_GOC_DATE (giống Tổng hợp)
 
 function _doiChieuQuyNCC(crmIds, nccMap) {
   var source = SpreadsheetApp.openById(SOURCE_ID);
@@ -1693,7 +1714,8 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
   }
 
   // Đọc quỹ kế toán NCC + quỹ gốc NCC
-  var colQuyGocNCC = _colNameToIndex(COL_QUY_GOC_NCC); // HZ
+  var colQuyGocNCC = _findDateCol(data[0], QUY_GOC_DATE);
+  if (colQuyGocNCC < 0) colQuyGocNCC = lastDateCol; // fallback
   var ketoanNCCMap = {}; // { ma_ncc: quy_ngay_cuoi }
   var nccQuyGocMap = {}; // { ma_ncc: quy_goc_31/12/2025 }
   for (var i = 3; i < data.length; i++) {
