@@ -182,27 +182,19 @@ function resetAndRebuild() {
   // 1. Xoá Kho_TaiKhoan (data rows)
   _clearSheetData_(crmIds, 'KHO_TK', 'Kho_TaiKhoan');
 
-  // 2. Xoá GD_KhachHang (data rows — sync lại toàn bộ từ nguồn)
+  // 2. Xoá DanhMuc_KH (data rows — tạo lại từ GD 2026, KH cũ không có GD sẽ bị loại)
+  _clearSheetData_(crmIds, 'KHACH_HANG', 'DanhMuc_KH');
+
+  // 3. Xoá GD_KhachHang (data rows — sync lại toàn bộ từ nguồn)
   _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'GD_KhachHang');
 
-  // 3. Xoá DoiSoat_GD (data rows)
+  // 4. Xoá DoiSoat_GD (data rows)
   _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'DoiSoat_GD');
 
-  // 4. Xoá GD_NhaCungCap (data rows — sync lại toàn bộ từ nguồn)
+  // 5. Xoá GD_NhaCungCap (data rows — sync lại toàn bộ từ nguồn)
   _clearSheetData_(crmIds, 'GD_NCC_' + NAM, 'GD_NhaCungCap');
 
-  // 5. DanhMuc_KH: reset quy_hien_tai (D) + quy_goc (E) về 0
-  var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
-  var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
-  if (sheetKH && sheetKH.getLastRow() > 1) {
-    var rowsKH = sheetKH.getLastRow() - 1;
-    var zerosKH = [];
-    for (var i = 0; i < rowsKH; i++) zerosKH.push([0, 0]);
-    sheetKH.getRange(2, 4, rowsKH, 2).setValues(zerosKH); // cột D + E
-    Logger.log('DanhMuc_KH: reset quy_hien_tai + quy_goc cho ' + rowsKH + ' KH');
-  }
-
-  // 6. DanhMuc_NCC: reset quy_hien_tai (cột L = 12) về 0
+  // 6. DanhMuc_NCC: GIỮ nguyên danh sách, chỉ reset quy_hien_tai (cột L = 12) về 0
   var ssNCC = _openCrm_(crmIds, 'NHA_CUNG_CAP');
   var sheetNCC = ssNCC.getSheetByName('DanhMuc_NCC');
   if (sheetNCC && sheetNCC.getLastRow() > 1) {
