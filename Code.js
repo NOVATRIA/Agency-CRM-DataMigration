@@ -352,6 +352,8 @@ function _syncKH(crmIds, allRows) {
 var _TRANG_THAI_MAP = {
   'chưa bán': 'Chua_ban',
   'chua ban':  'Chua_ban',
+  'đã bán':   'Da_ban',
+  'da ban':    'Da_ban',
   'huỷ':       'Huy',
   'hủy':       'Huy',
   'huy':       'Huy',
