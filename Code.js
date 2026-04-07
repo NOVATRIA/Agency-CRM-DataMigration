@@ -1582,9 +1582,11 @@ function _doiChieuQuy(crmIds) {
   }
 
   var warnings = [];
-  var khKeys = Object.keys(ketoanMap);
+  // Chỉ so sánh KH có trong CRM (có trong DanhMuc_KH)
+  var khKeys = Object.keys(quyGocCRM);
   for (var j = 0; j < khKeys.length; j++) {
     var mk = khKeys[j];
+    if (ketoanMap[mk] === undefined) continue; // KH không có trong "Tổng hợp" → bỏ qua
     var quyGoc = quyGocCRM[mk] || 0;
     var tongBienDong = quyCRMMap[mk] || 0;
     var quyCRM = quyGoc + tongBienDong;
