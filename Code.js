@@ -1873,32 +1873,10 @@ function _lookupNcc(nccMap, nguon) {
  * Tìm hoặc tạo file MigrationLogs trong 1-Database/Logs/
  * Dùng MASTER_SS_ID → tìm folder cha (1-Database) → tạo Logs/MigrationLogs
  */
+var MIGRATION_LOGS_ID = '1McqcuerdYK89A3g6Afyfm4nIz3mZM8qhdEtTdeBw_iw';
+
 function _getLogSpreadsheet_() {
-  // Tìm folder 1-Database (folder chứa Master)
-  var masterFile = DriveApp.getFileById(MASTER_SS_ID);
-  var parents = masterFile.getParents();
-  if (!parents.hasNext()) throw new Error('Không tìm thấy folder cha của Master');
-  var dbFolder = parents.next();
-
-  // Tìm hoặc tạo folder Logs
-  var logsFolder;
-  var logsFolders = dbFolder.getFoldersByName('Logs');
-  if (logsFolders.hasNext()) {
-    logsFolder = logsFolders.next();
-  } else {
-    logsFolder = dbFolder.createFolder('Logs');
-  }
-
-  // Tìm hoặc tạo file MigrationLogs
-  var files = logsFolder.getFilesByName('MigrationLogs');
-  if (files.hasNext()) {
-    return SpreadsheetApp.open(files.next());
-  }
-
-  var ss = SpreadsheetApp.create('MigrationLogs');
-  DriveApp.getFileById(ss.getId()).moveTo(logsFolder);
-  // Xóa Sheet1 mặc định sau khi tạo các tab
-  return ss;
+  return SpreadsheetApp.openById(MIGRATION_LOGS_ID);
 }
 
 function _writeLog(crmIds, stats) {
