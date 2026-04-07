@@ -172,15 +172,16 @@ function buildAll() {
   var statsNCC    = _syncNCC(crmIds, nccGDRows, nccMap);
   var statsGDNCC  = _syncGDNCC(crmIds, nccGDRows, nccMap);
 
-  // Bước 5: Import quỹ gốc từ "Tổng hợp" (chỉ cập nhật KH chưa có quy_goc)
+  // Bước 5: Import quỹ gốc KH + NCC
   _importQuyGoc(crmIds);
+  var nccQuyGocMap = _importQuyGocNCC(crmIds, nccMap) || {};
 
   // Bước 6: Tính lại quỹ cho KH + NCC có GD mới
   if (statsGD.newMaKHs && statsGD.newMaKHs.length > 0) {
     _recomputeQuyKH(crmIds, statsGD.newMaKHs);
   }
   if (statsGDNCC.newMaNCCs && statsGDNCC.newMaNCCs.length > 0) {
-    _recomputeQuyNCC(crmIds, statsGDNCC.newMaNCCs);
+    _recomputeQuyNCC(crmIds, statsGDNCC.newMaNCCs, nccQuyGocMap);
   }
 
   // Bước 7: Đối chiếu quỹ CRM vs Kế Toán (ghi Warning_Log + Telegram nếu lệch)
@@ -906,7 +907,7 @@ function _recomputeQuyKH(crmIds, affectedMaKHs) {
  * - Nap_CID:  Nạp tiền vào CID → Quỹ NCC -
  * - Refund:   NCC trả lại tiền → Quỹ NCC - (rút sạch)
  */
-function _recomputeQuyNCC(crmIds, affectedMaNCCs) {
+function _recomputeQuyNCC(crmIds, affectedMaNCCs, quyGocNCCMap) {
   if (!affectedMaNCCs || affectedMaNCCs.length === 0) return;
   Logger.log('Recompute quỹ NCC cho ' + affectedMaNCCs.length + ' NCC: ' + affectedMaNCCs.join(', '));
 
@@ -941,7 +942,7 @@ function _recomputeQuyNCC(crmIds, affectedMaNCCs) {
       return da - db;
     });
 
-    var quy = 0;
+    var quy = (quyGocNCCMap && quyGocNCCMap[mn]) ? quyGocNCCMap[mn] : 0; // bắt đầu từ quỹ gốc NCC
     gds.forEach(function(gd) {
       var quyTruoc = quy;
       var bienDong = 0;
@@ -1411,28 +1412,16 @@ function _readQuyGoc() {
     else if (val && val.toString().match(/^\d{2}\/\d{2}\/\d{4}$/)) lastDateCol = c;
   }
 
+  // Đọc tất cả KH có mã hợp lệ — _importQuyGoc chỉ ghi cho KH đã có trong CRM
   var map = {};
-  var skipped = 0;
-  for (var i = 5; i < data.length; i++) { // data bắt đầu từ dòng 6 (index 5)
-    var maKH = (data[i][colMaKH] || '').toString().trim();
+  for (var i = 5; i < data.length; i++) {
+    var maKH = _fixMaKH((data[i][colMaKH] || '').toString().trim());
     if (!maKH || !MA_KH_REGEX.test(maKH)) continue;
-
-    // Bỏ qua KH không hoạt động + quỹ hiện tại = 0
-    var ttNapRut = (data[i][colTTNapRut] || '').toString().trim().toLowerCase();
-    var ttMuaTK = (data[i][colTTMuaTK] || '').toString().trim().toLowerCase();
-    var quyHienTai = parseFloat(data[i][lastDateCol]) || 0;
-
-    var khongHoatDong = ttNapRut.indexOf('không') >= 0 && ttMuaTK.indexOf('không') >= 0;
-    if (khongHoatDong && quyHienTai === 0) {
-      skipped++;
-      continue;
-    }
-
     var quyGoc = parseFloat(data[i][colQuyGoc]) || 0;
     map[maKH] = quyGoc;
   }
 
-  Logger.log('Quỹ gốc: đọc ' + Object.keys(map).length + ' KH, bỏ qua ' + skipped + ' KH không hoạt động');
+  Logger.log('Quỹ gốc: đọc ' + Object.keys(map).length + ' KH từ cột ' + COL_QUY_GOC);
   return map;
 }
 
@@ -1456,7 +1445,49 @@ function _importQuyGoc(crmIds) {
     }
   }
 
-  Logger.log('Import quỹ gốc: ' + updated + ' KH cập nhật');
+  Logger.log('Import quỹ gốc KH: ' + updated + ' KH cập nhật');
+}
+
+/**
+ * Import quỹ gốc NCC từ tab "Nguồn" cột HZ (31/12/2025)
+ * Ghi vào DanhMuc_NCC cột quy_goc (nếu có)
+ */
+function _importQuyGocNCC(crmIds, nccMap) {
+  var source = SpreadsheetApp.openById(SOURCE_ID);
+  var sheet = source.getSheetByName(TAB_NGUON);
+  if (!sheet) {
+    Logger.log('WARNING: Không tìm thấy tab "' + TAB_NGUON + '" để import quỹ gốc NCC');
+    return;
+  }
+
+  var data = sheet.getDataRange().getValues();
+  if (data.length <= 3) return;
+
+  var colTenNguon = 1; // B
+  var colQuyGocNCC = _colNameToIndex(COL_QUY_GOC_NCC); // HZ
+
+  // Đọc quỹ gốc theo tên NCC → map sang mã NCC
+  var quyGocMap = {}; // { ma_ncc: quy_goc }
+  for (var i = 3; i < data.length; i++) {
+    var tenNguon = (data[i][colTenNguon] || '').toString().trim();
+    if (!tenNguon) continue;
+    var maNcc = _lookupNcc(nccMap, tenNguon);
+    if (!maNcc) continue;
+    var quyGoc = parseFloat(data[i][colQuyGocNCC]) || 0;
+    quyGocMap[maNcc] = quyGoc;
+  }
+
+  if (Object.keys(quyGocMap).length === 0) {
+    Logger.log('Import quỹ gốc NCC: không có NCC nào để import');
+    return;
+  }
+
+  // Ghi vào DanhMuc_NCC — tìm cột quy_goc (nếu chưa có thì dùng cột khác)
+  // DanhMuc_NCC hiện tại: cột L (12) = quy_hien_tai
+  // Cần thêm cột quy_goc — dùng cột phụ hoặc tính trực tiếp trong recompute
+  // Approach: không ghi cột riêng, thay vào đó truyền quyGocMap vào _recomputeQuyNCC
+  Logger.log('Import quỹ gốc NCC: đọc ' + Object.keys(quyGocMap).length + ' NCC');
+  return quyGocMap;
 }
 
 /**
@@ -1515,6 +1546,10 @@ function _doiChieuQuy(crmIds) {
   var hdrVal = data[1][lastDateCol];
   if (hdrVal instanceof Date) lastDate = hdrVal;
   else if (hdrVal) { var pd = _parseDate(hdrVal); if (pd) lastDate = pd; }
+  // Set cuối ngày (23:59:59) để so sánh chính xác
+  if (lastDate) {
+    lastDate = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate(), 23, 59, 59);
+  }
 
   // Đọc quy_goc từ DanhMuc_KH
   var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
@@ -1537,7 +1572,7 @@ function _doiChieuQuy(crmIds) {
     if (!gdMaKH || ketoanMap[gdMaKH] === undefined) continue;
     var gdNgay = gdData[g][14]; // ngay_tao
     // Chỉ tính GD có ngày <= ngày đối chiếu
-    if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime() + 86400000) continue; // +1 ngày buffer (cuối ngày)
+    if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime()) continue; // +1 ngày buffer (cuối ngày)
     var gdLoai = (gdData[g][2] || '').toString().trim();
     var gdHttt = (gdData[g][3] || '').toString().trim();
     var gdSoTien = parseFloat(gdData[g][5]) || 0;
@@ -1645,19 +1680,24 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
     Logger.log('WARNING: Không tìm thấy cột ngày trong tab Nguồn');
     return;
   }
+  if (lastDate) {
+    lastDate = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate(), 23, 59, 59);
+  }
 
-  // Đọc quỹ kế toán NCC (bỏ qua NCC có quỹ = 0)
-  var ketoanNCCMap = {}; // { ma_ncc: quy }
-  for (var i = 3; i < data.length; i++) { // data từ dòng 4 (index 3)
+  // Đọc quỹ kế toán NCC + quỹ gốc NCC
+  var colQuyGocNCC = _colNameToIndex(COL_QUY_GOC_NCC); // HZ
+  var ketoanNCCMap = {}; // { ma_ncc: quy_ngay_cuoi }
+  var nccQuyGocMap = {}; // { ma_ncc: quy_goc_31/12/2025 }
+  for (var i = 3; i < data.length; i++) {
     var tenNguon = (data[i][colTenNguon] || '').toString().trim();
     if (!tenNguon) continue;
     var quyVal = parseFloat(data[i][lastDateCol]) || 0;
-    if (quyVal === 0) continue; // bỏ qua NCC quỹ = 0
+    if (quyVal === 0) continue;
 
-    // Map tên nguồn → mã NCC
     var maNcc = _lookupNcc(nccMap, tenNguon);
-    if (!maNcc) continue; // không map được → bỏ qua (NCC không còn hoạt động)
+    if (!maNcc) continue;
     ketoanNCCMap[maNcc] = quyVal;
+    nccQuyGocMap[maNcc] = parseFloat(data[i][colQuyGocNCC]) || 0;
   }
 
   if (Object.keys(ketoanNCCMap).length === 0) {
@@ -1676,7 +1716,7 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
     var gdMaNCC = (gdData[g][2] || '').toString().trim();
     if (!gdMaNCC || ketoanNCCMap[gdMaNCC] === undefined) continue;
     var gdNgay = gdData[g][1]; // ngay_gd
-    if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime() + 86400000) continue;
+    if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime()) continue;
     if (!gdByNCC[gdMaNCC]) gdByNCC[gdMaNCC] = [];
     gdByNCC[gdMaNCC].push({
       ngay: gdNgay,
@@ -1693,7 +1733,7 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
       var db = b.ngay instanceof Date ? b.ngay.getTime() : 0;
       return da - db;
     });
-    var quy = 0;
+    var quy = nccQuyGocMap[mn] || 0; // bắt đầu từ quỹ gốc NCC
     gds.forEach(function(gd) {
       if (gd.loai_gd === 'Nap_quy')      quy += gd.so_tien;
       else if (gd.loai_gd === 'Rut_CID') quy += gd.so_tien;
