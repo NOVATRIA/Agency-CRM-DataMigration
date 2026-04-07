@@ -88,10 +88,12 @@ function _openCrm_(crmIds, key) {
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || '';
-  // Nếu chạy từ editor (không có param), default chạy readAuditSummary
+  // Nếu chạy từ editor (không có param), default chạy resetAndRebuild + auditAll
   if (!action) {
+    resetAndRebuild();
+    auditAll();
     readAuditSummary();
-    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'readAuditSummary done (default). Check Audit_Summary tab.' }))
+    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild + auditAll + readAuditSummary done.' }))
       .setMimeType(ContentService.MimeType.JSON);
   }
   // Token check: bỏ qua nếu ADMIN_TOKEN chưa set trong CauHinh
@@ -1009,7 +1011,7 @@ function _readTopup() {
     var ngay = _parseDate(r[col['Thời gian']]);
     if (!ngay || ngay < DATE_FROM) continue;
 
-    var maKH = (r[col['Mã khách hàng']] || '').toString().trim();
+    var maKH = _fixMaKH((r[col['Mã khách hàng']] || '').toString().trim());
     if (!maKH) continue;
     if (NCC_MA_KH.indexOf(maKH) >= 0) continue;
 
@@ -1069,7 +1071,7 @@ function _readDoiChieu() {
     var ngay = _parseDate(r[col['Ngày']]);
     if (!ngay || ngay < DATE_FROM) continue;
 
-    var maKH = (r[col['Mã KH']] || '').toString().trim();
+    var maKH = _fixMaKH((r[col['Mã KH']] || '').toString().trim());
     if (!maKH) continue;
     if (NCC_MA_KH.indexOf(maKH) >= 0) continue;
 
@@ -1330,6 +1332,9 @@ function _readTKTrongKho() {
     var ma_kh = (colMaKH !== undefined) ? (row[colMaKH] || '').toString().trim() : '';
     var ngay_nhap = (colNgayNhap !== undefined) ? _parseDate(row[colNgayNhap]) : null;
     var ngay_ban = (colNgayCap !== undefined) ? _parseDate(row[colNgayCap]) : null;
+
+    // Auto-correct Mã KH
+    ma_kh = _fixMaKH(ma_kh);
 
     // Validation: Mã KH sai format
     if (ma_kh && !MA_KH_REGEX.test(ma_kh)) {
@@ -2002,6 +2007,18 @@ function _sendTelegram(message) {
 // ============================================================
 // TIỆN ÍCH
 // ============================================================
+
+/**
+ * Auto-correct Mã KH:
+ * - Xoá khoảng trắng thừa: "LLK- 122501" → "LLK-122501"
+ * - Đổi prefix sai: "LLD-112503" → "LLK-112503"
+ */
+function _fixMaKH(maKH) {
+  if (!maKH) return '';
+  maKH = maKH.replace(/\s+/g, ''); // xoá tất cả khoảng trắng
+  maKH = maKH.replace(/^LLD-/i, 'LLK-'); // đổi LLD → LLK
+  return maKH;
+}
 
 function _parseCIDs(raw, rowNum, tab) {
   if (!raw || raw === '-') return [];
