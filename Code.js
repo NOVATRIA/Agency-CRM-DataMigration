@@ -205,12 +205,26 @@ function resetAndRebuild() {
     Logger.log('DanhMuc_NCC: reset quy_hien_tai cho ' + rowsNCC + ' NCC');
   }
 
-  // 7. Reset mã GD counter
+  // 7. Clear MigrationLogs (Run_Log, Error_Log, Warning_Log)
+  var logSS = _getLogSpreadsheet_();
+  var logTabs = ['Run_Log', 'Error_Log', 'Warning_Log'];
+  logTabs.forEach(function(tabName) {
+    var logSheet = logSS.getSheetByName(tabName);
+    if (logSheet && logSheet.getLastRow() > 1) {
+      logSheet.getRange(2, 1, logSheet.getLastRow() - 1, logSheet.getLastColumn()).clearContent();
+      if (logSheet.getLastRow() > 2) {
+        try { logSheet.deleteRows(3, logSheet.getLastRow() - 2); } catch(e) {}
+      }
+      Logger.log('MigrationLogs/' + tabName + ': đã xoá');
+    }
+  });
+
+  // 8. Reset mã GD counter
   _maGdCounters = {};
 
   Logger.log('=== RESET XONG — Bắt đầu buildAll() ===');
 
-  // 8. Chạy buildAll() để sync lại từ nguồn
+  // 9. Chạy buildAll() để sync lại từ nguồn
   buildAll();
 }
 
