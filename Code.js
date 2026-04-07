@@ -1401,6 +1401,7 @@ function _doiChieuQuy(crmIds) {
     Logger.log('WARNING: Không tìm thấy cột ngày trong tab Tổng hợp');
     return;
   }
+  Logger.log('Đối chiếu KH: ngày cột cuối = ' + lastDateVal + ' (col index ' + lastDateCol + ')');
 
   // Đọc quỹ kế toán theo KH (bỏ qua KH không hoạt động + quỹ = 0)
   var colTTNapRut = 4;   // E
@@ -1417,6 +1418,7 @@ function _doiChieuQuy(crmIds) {
 
     ketoanMap[maKH] = quyVal;
   }
+  Logger.log('Đối chiếu KH: ' + Object.keys(ketoanMap).length + ' KH kế toán để so sánh');
 
   // Tính quỹ CRM cho từng KH — chỉ tính GD đến ngày đối chiếu
   // (tránh chênh lệch giả khi CRM có GD mới hơn "Tổng hợp")
@@ -1505,7 +1507,9 @@ function _doiChieuQuy(crmIds) {
 
     Logger.log('Đối chiếu quỹ: ' + warnings.length + ' KH chênh lệch → đã ghi Warning_Log + Telegram');
   } else {
-    Logger.log('Đối chiếu quỹ: OK — không có chênh lệch');
+    Logger.log('Đối chiếu quỹ: OK — ' + khKeys.length + ' KH khớp, không có chênh lệch');
+    _sendTelegram('✅ *Đối chiếu quỹ KH* (' + lastDateVal + ')\n\n'
+      + Object.keys(ketoanMap).length + ' KH đã kiểm tra — tất cả khớp.');
   }
 }
 
@@ -1660,7 +1664,9 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
 
     Logger.log('Đối chiếu NCC: ' + warnings.length + ' NCC chênh lệch → đã ghi Warning_Log + Telegram');
   } else {
-    Logger.log('Đối chiếu NCC: OK — không có chênh lệch');
+    Logger.log('Đối chiếu NCC: OK — ' + nccKeys.length + ' NCC khớp, không có chênh lệch');
+    _sendTelegram('✅ *Đối chiếu quỹ NCC* (' + lastDateVal + ')\n\n'
+      + Object.keys(ketoanNCCMap).length + ' NCC đã kiểm tra — tất cả khớp.');
   }
 }
 
