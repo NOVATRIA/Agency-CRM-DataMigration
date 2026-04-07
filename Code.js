@@ -1443,7 +1443,7 @@ function _readQuyGoc() {
     map[maKH] = quyGoc;
   }
 
-  Logger.log('Quỹ gốc: đọc ' + Object.keys(map).length + ' KH từ cột ' + COL_QUY_GOC);
+  Logger.log('Quỹ gốc: đọc ' + Object.keys(map).length + ' KH từ cột ' + colQuyGoc + ' (' + Utilities.formatDate(QUY_GOC_DATE, TZ, 'dd/MM/yyyy') + ')');
   return map;
 }
 
