@@ -1575,23 +1575,39 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
   var sheetGD = ssGD.getSheetByName('GD_NhaCungCap');
   var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
 
-  var quyCRMMap = {}; // { ma_ncc: tổng biến động }
+  // Group GD theo NCC, sort theo ngày, tính tuần tự (Refund cần quỹ hiện tại)
+  var gdByNCC = {};
   for (var g = 1; g < gdData.length; g++) {
     var gdMaNCC = (gdData[g][2] || '').toString().trim();
     if (!gdMaNCC || ketoanNCCMap[gdMaNCC] === undefined) continue;
     var gdNgay = gdData[g][1]; // ngay_gd
     if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime() + 86400000) continue;
-    var gdLoai = (gdData[g][3] || '').toString().trim();
-    var gdSoTien = parseFloat(gdData[g][5]) || 0;
-    var bd = 0;
-    if (gdLoai === 'Nap_quy')      bd = gdSoTien;
-    else if (gdLoai === 'Rut_CID') bd = gdSoTien;
-    else if (gdLoai === 'Mua_TK')  bd = -gdSoTien;
-    else if (gdLoai === 'Nap_CID') bd = -gdSoTien;
-    else if (gdLoai === 'Refund')  bd = -(quyCRMMap[gdMaNCC] || 0); // rút sạch
-    if (!quyCRMMap[gdMaNCC]) quyCRMMap[gdMaNCC] = 0;
-    quyCRMMap[gdMaNCC] += bd;
+    if (!gdByNCC[gdMaNCC]) gdByNCC[gdMaNCC] = [];
+    gdByNCC[gdMaNCC].push({
+      ngay: gdNgay,
+      loai_gd: (gdData[g][3] || '').toString().trim(),
+      so_tien: parseFloat(gdData[g][5]) || 0
+    });
   }
+
+  var quyCRMMap = {};
+  Object.keys(gdByNCC).forEach(function(mn) {
+    var gds = gdByNCC[mn];
+    gds.sort(function(a, b) {
+      var da = a.ngay instanceof Date ? a.ngay.getTime() : 0;
+      var db = b.ngay instanceof Date ? b.ngay.getTime() : 0;
+      return da - db;
+    });
+    var quy = 0;
+    gds.forEach(function(gd) {
+      if (gd.loai_gd === 'Nap_quy')      quy += gd.so_tien;
+      else if (gd.loai_gd === 'Rut_CID') quy += gd.so_tien;
+      else if (gd.loai_gd === 'Mua_TK')  quy -= gd.so_tien;
+      else if (gd.loai_gd === 'Nap_CID') quy -= gd.so_tien;
+      else if (gd.loai_gd === 'Refund')  quy = 0; // rút sạch
+    });
+    quyCRMMap[mn] = quy;
+  });
 
   // So sánh
   var warnings = [];
