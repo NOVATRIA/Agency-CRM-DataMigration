@@ -88,12 +88,20 @@ function _openCrm_(crmIds, key) {
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || '';
-  var token = (e && e.parameter && e.parameter.admin_token) || '';
-  var expectedToken = _readCauHinh('ADMIN_TOKEN');
-
-  if (!expectedToken || token !== expectedToken) {
-    return ContentService.createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
+  // Nếu chạy từ editor (không có param), default chạy readAuditSummary
+  if (!action) {
+    readAuditSummary();
+    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'readAuditSummary done (default). Check Audit_Summary tab.' }))
       .setMimeType(ContentService.MimeType.JSON);
+  }
+  // Token check: bỏ qua nếu ADMIN_TOKEN chưa set trong CauHinh
+  var expectedToken = _readCauHinh('ADMIN_TOKEN');
+  if (expectedToken) {
+    var token = (e && e.parameter && e.parameter.admin_token) || '';
+    if (token !== expectedToken) {
+      return ContentService.createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
   }
 
   try {
@@ -110,6 +118,11 @@ function doGet(e) {
     if (action === 'buildAll') {
       buildAll();
       return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'buildAll() completed.' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    if (action === 'readAuditSummary') {
+      readAuditSummary();
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'readAuditSummary done. Check Audit_Summary tab.' }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     return ContentService.createTextOutput(JSON.stringify({ error: 'Unknown action: ' + action }))
@@ -227,7 +240,7 @@ function resetAndRebuild() {
   _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'GD_KhachHang');
 
   // 4. Xoá DoiSoat_GD (data rows)
-  _clearSheetData_(crmIds, 'GD_KH_' + NAM, 'DoiSoat_GD');
+  _clearSheetData_(crmIds, 'DOI_SOAT_' + NAM, 'DoiSoat_GD');
 
   // 5. Xoá GD_NhaCungCap (data rows — sync lại toàn bộ từ nguồn)
   _clearSheetData_(crmIds, 'GD_NCC_' + NAM, 'GD_NhaCungCap');
@@ -600,7 +613,7 @@ function _syncGDKH(crmIds, allRows, nccMap) {
       }
     });
     if (dsRows.length > 0) {
-      var ssDoi = _openCrm_(crmIds, 'GD_KH_' + NAM);
+      var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
       var sheetDoi = ssDoi.getSheetByName('DoiSoat_GD');
       if (sheetDoi) {
         var lastDoi = sheetDoi.getLastRow();
@@ -1142,6 +1155,22 @@ function _readDoiChieuNCC() {
   var col = {};
   headers.forEach(function(h, i) { col[h.toString().trim()] = i; });
 
+  // Debug: log tên tất cả cột để tìm đúng tên cột NCC
+  if (col['Giao dịch với Nguồn'] === undefined) {
+    Logger.log('WARNING: Không tìm thấy cột "Giao dịch với Nguồn". Các cột hiện có:');
+    headers.forEach(function(h, i) {
+      var name = h.toString().trim();
+      if (name) Logger.log('  Col ' + i + ': "' + name + '"');
+    });
+    // Thử tìm cột gần đúng
+    headers.forEach(function(h, i) {
+      var name = h.toString().trim().toLowerCase();
+      if (name.indexOf('nguồn') >= 0 || name.indexOf('nguon') >= 0) {
+        Logger.log('  → Có thể là cột NCC: Col ' + i + ': "' + h.toString().trim() + '"');
+      }
+    });
+  }
+
   var rows = [];
   for (var i = 1; i < data.length; i++) {
     var r = data[i];
@@ -1231,6 +1260,8 @@ function _readDoiChieuNCC() {
  *   list: mảng object { cid, ten_group, tinh_trang, ma_kh, ngay_nhap, ngay_ban, dong }
  *   groupMap: dùng cho lookup NCC (tương thích code cũ)
  */
+var START_ROW_KHO = 2347; // Chỉ quét từ dòng này trở đi (tháng 01/2026)
+
 function _readTKTrongKho() {
   var source = SpreadsheetApp.openById(SOURCE_ID);
   var sheet = source.getSheetByName(TAB_TK_KHO);
@@ -1262,7 +1293,8 @@ function _readTKTrongKho() {
   var list = [];
   var groupMap = {};
 
-  for (var i = 7; i < data.length; i++) {
+  var startIdx = Math.max(7, START_ROW_KHO - 1); // START_ROW_KHO là 1-based, index là 0-based
+  for (var i = startIdx; i < data.length; i++) {
     var row = data[i];
     var rawCid = row[colCID];
     var group = (row[colGroup] || '').toString().trim();
@@ -2270,7 +2302,8 @@ function auditDoiSoat() {
   var sheetGD = ssGD.getSheetByName('GD_KhachHang');
   var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
 
-  var sheetDS = ssGD.getSheetByName('DoiSoat_GD');
+  var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
+  var sheetDS = ssDoi.getSheetByName('DoiSoat_GD');
   var dsData = sheetDS ? sheetDS.getDataRange().getValues() : [];
 
   // Build set of ma_gd đã có trong DoiSoat_GD
@@ -2311,6 +2344,60 @@ function auditDoiSoat() {
 function _logSkip(map, rowNum, reason) {
   if (!map[reason]) map[reason] = [];
   map[reason].push(rowNum);
+}
+
+/**
+ * Đọc Audit_Log và in tóm tắt vào Logger
+ */
+function readAuditSummary() {
+  var logSS = _getLogSpreadsheet_();
+  var sheet = logSS.getSheetByName('Audit_Log');
+  if (!sheet) return;
+  var data = sheet.getDataRange().getValues();
+
+  var stats = {};
+  var skipReasons = {};
+  var summaryRows = [];
+
+  for (var i = 1; i < data.length; i++) {
+    var nguon = (data[i][0] || '').toString().trim();
+    var trangThai = (data[i][2] || '').toString().trim();
+    var lyDo = (data[i][3] || '').toString().trim();
+
+    if (trangThai === 'TỔNG') {
+      summaryRows.push([nguon, lyDo, (data[i][4] || '').toString()]);
+      continue;
+    }
+
+    var key = nguon + '|' + trangThai;
+    stats[key] = (stats[key] || 0) + 1;
+
+    if (trangThai === 'SKIP' || trangThai === 'MISSING') {
+      var rKey = nguon + '|' + lyDo;
+      skipReasons[rKey] = (skipReasons[rKey] || 0) + 1;
+    }
+  }
+
+  // Ghi vào sheet Audit_Summary
+  var sumSheet = logSS.getSheetByName('Audit_Summary');
+  if (sumSheet) logSS.deleteSheet(sumSheet);
+  sumSheet = logSS.insertSheet('Audit_Summary');
+
+  var rows = [['Loại', 'Nội dung', 'Số lượng']];
+
+  rows.push(['--- TỔNG KẾT ---', '', '']);
+  summaryRows.forEach(function(s) { rows.push(['TỔNG ' + s[0], s[1], s[2]]); });
+
+  rows.push(['', '', '']);
+  rows.push(['--- THỐNG KÊ ---', '', '']);
+  Object.keys(stats).sort().forEach(function(k) { rows.push([k, '', stats[k]]); });
+
+  rows.push(['', '', '']);
+  rows.push(['--- LÝ DO BỎ QUA ---', '', '']);
+  Object.keys(skipReasons).sort().forEach(function(k) { rows.push([k, '', skipReasons[k]]); });
+
+  sumSheet.getRange(1, 1, rows.length, 3).setValues(rows);
+  sumSheet.getRange(1, 1, 1, 3).setFontWeight('bold');
 }
 
 /**
@@ -2438,7 +2525,8 @@ function auditAll() {
   var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
   var gdSheet = ssGD.getSheetByName('GD_KhachHang');
   var gdData = gdSheet ? gdSheet.getDataRange().getValues() : [];
-  var dsSheet = ssGD.getSheetByName('DoiSoat_GD');
+  var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
+  var dsSheet = ssDoi.getSheetByName('DoiSoat_GD');
   var dsData = dsSheet ? dsSheet.getDataRange().getValues() : [];
 
   var dsSet = {};
