@@ -2274,3 +2274,160 @@ function _logSkip(map, rowNum, reason) {
   if (!map[reason]) map[reason] = [];
   map[reason].push(rowNum);
 }
+
+/**
+ * Chạy thủ công: auditAll()
+ * Chạy cả 3 audit + ghi kết quả chi tiết vào MigrationLogs/Audit_Log
+ * Dùng khi không thể xem Logger.log trực tiếp.
+ */
+function auditAll() {
+  var logSS = _getLogSpreadsheet_();
+  var auditSheet = logSS.getSheetByName('Audit_Log');
+  if (auditSheet) logSS.deleteSheet(auditSheet);
+  auditSheet = logSS.insertSheet('Audit_Log');
+  auditSheet.getRange(1, 1, 1, 5).setValues([['Nguồn', 'Dòng', 'Trạng thái', 'Lý do', 'Chi tiết']]);
+  auditSheet.getRange(1, 1, 1, 5).setBackground('#1565C0').setFontColor('#FFFFFF').setFontWeight('bold');
+  auditSheet.setFrozenRows(1);
+
+  var rows = [];
+
+  // ── AUDIT TOPUP ──
+  var START_TOPUP = 2604;
+  var source = SpreadsheetApp.openById(SOURCE_ID);
+  var sheetTopup = source.getSheetByName(TAB_TOPUP);
+  if (sheetTopup) {
+    var tData = sheetTopup.getDataRange().getValues();
+    var tHeaders = tData[0];
+    var tCol = {};
+    tHeaders.forEach(function(h, i) { tCol[h.toString().trim()] = i; });
+
+    var tTaken = 0, tSkipped = 0;
+    for (var ti = START_TOPUP - 1; ti < tData.length; ti++) {
+      var tr = tData[ti];
+      var tRowNum = ti + 1;
+
+      var tHasData = false;
+      for (var tc = 0; tc < tr.length; tc++) {
+        if (tr[tc] !== '' && tr[tc] !== null && tr[tc] !== undefined) { tHasData = true; break; }
+      }
+      if (!tHasData) { rows.push(['Topup', tRowNum, 'SKIP', 'Dòng trống', '']); tSkipped++; continue; }
+
+      var tNgayRaw = tr[tCol['Thời gian']];
+      var tNgay = _parseDate(tNgayRaw);
+      if (!tNgay) { rows.push(['Topup', tRowNum, 'SKIP', 'Ngày không hợp lệ', String(tNgayRaw)]); tSkipped++; continue; }
+      if (tNgay < DATE_FROM) { rows.push(['Topup', tRowNum, 'SKIP', 'Ngày < 2026', tNgay.toISOString().substring(0,10)]); tSkipped++; continue; }
+
+      var tMaKH = (tr[tCol['Mã khách hàng']] || '').toString().trim();
+      if (!tMaKH) { rows.push(['Topup', tRowNum, 'SKIP', 'Mã KH trống', '']); tSkipped++; continue; }
+      if (NCC_MA_KH.indexOf(tMaKH) >= 0) { rows.push(['Topup', tRowNum, 'SKIP', 'Mã KH là NCC', tMaKH]); tSkipped++; continue; }
+
+      var tTinhTrang = (tr[tCol['Tình trạng']] || '').toString().trim();
+      if (tTinhTrang.toLowerCase() !== 'done') { rows.push(['Topup', tRowNum, 'SKIP', 'Tình trạng ≠ Done', tTinhTrang]); tSkipped++; continue; }
+
+      var tYeuCau = (tr[tCol['Yêu cầu']] || '').toString().trim().toUpperCase();
+      if (tYeuCau !== 'DEPOSIT' && tYeuCau !== 'WITHDRAW') { rows.push(['Topup', tRowNum, 'SKIP', 'Yêu cầu lạ', tYeuCau]); tSkipped++; continue; }
+
+      if (!MA_KH_REGEX.test(tMaKH)) { rows.push(['Topup', tRowNum, 'SKIP', 'Mã KH sai format', tMaKH]); tSkipped++; continue; }
+
+      rows.push(['Topup', tRowNum, 'OK', tYeuCau, tMaKH]);
+      tTaken++;
+    }
+    rows.push(['Topup', '', 'TỔNG', 'OK: ' + tTaken + ' | Skip: ' + tSkipped, 'Quét dòng ' + START_TOPUP + ' → ' + tData.length]);
+  }
+
+  // ── AUDIT ĐỐI CHIẾU ──
+  var START_DC = 2371;
+  var sheetDC = source.getSheetByName(TAB_DOI_CHIEU);
+  if (sheetDC) {
+    var dData = sheetDC.getDataRange().getValues();
+    var dHeaders = dData[0];
+    var dCol = {};
+    dHeaders.forEach(function(h, i) { dCol[h.toString().trim()] = i; });
+
+    var dTakenKH = 0, dTakenNCC = 0, dSkipped = 0;
+    for (var di = START_DC - 1; di < dData.length; di++) {
+      var dr = dData[di];
+      var dRowNum = di + 1;
+
+      var dHasData = false;
+      for (var dc = 0; dc < dr.length; dc++) {
+        if (dr[dc] !== '' && dr[dc] !== null && dr[dc] !== undefined) { dHasData = true; break; }
+      }
+      if (!dHasData) { rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Dòng trống', '']); dSkipped++; continue; }
+
+      var dNgayRaw = dr[dCol['Ngày']];
+      var dNgay = _parseDate(dNgayRaw);
+      if (!dNgay) { rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Ngày không hợp lệ', String(dNgayRaw)]); dSkipped++; continue; }
+      if (dNgay < DATE_FROM) { rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Ngày < 2026', dNgay.toISOString().substring(0,10)]); dSkipped++; continue; }
+
+      var dMaKH = (dr[dCol['Mã KH']] || '').toString().trim();
+      var dGdKhach = (dr[dCol['Giao dịch với khách']] || '').toString().trim();
+      var dGdNguon = (dr[dCol['Giao dịch với Nguồn']] || '').toString().trim();
+      var dHttt = (dr[dCol['Hình thức thanh toán']] || '').toString().trim();
+
+      var dKHStatus = '';
+      if (dGdKhach) {
+        if (!dMaKH) { dKHStatus = 'SKIP:MãKH trống'; }
+        else if (NCC_MA_KH.indexOf(dMaKH) >= 0) { dKHStatus = 'SKIP:MãKH là NCC'; }
+        else if (dGdKhach !== 'Khách Nạp tiền' && dGdKhach !== 'Khách mua TK') { dKHStatus = 'SKIP:GD khách="' + dGdKhach + '"'; }
+        else if (dGdKhach === 'Khách mua TK' && dHttt.toLowerCase().indexOf('ghim') >= 0) { dKHStatus = 'SKIP:httt ghim'; }
+        else if (!MA_KH_REGEX.test(dMaKH)) { dKHStatus = 'SKIP:MãKH sai format "' + dMaKH + '"'; }
+        else { dKHStatus = 'OK'; dTakenKH++; }
+      }
+
+      var dNCCStatus = '';
+      if (dGdNguon) {
+        if (dGdNguon !== 'Nạp tiền cho nguồn' && dGdNguon !== 'Mua Tài khoản') { dNCCStatus = 'SKIP:GD nguồn="' + dGdNguon + '"'; }
+        else if (dHttt.toLowerCase().indexOf('ghim') >= 0) { dNCCStatus = 'SKIP:httt ghim'; }
+        else { dNCCStatus = 'OK'; dTakenNCC++; }
+      }
+
+      if (!dGdKhach && !dGdNguon) {
+        rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Không có GD khách/nguồn', '']);
+        dSkipped++;
+      } else {
+        var detail = 'KH:' + (dKHStatus || 'N/A') + ' | NCC:' + (dNCCStatus || 'N/A');
+        var status = (dKHStatus === 'OK' || dNCCStatus === 'OK') ? 'OK' : 'SKIP';
+        if (status === 'SKIP') dSkipped++;
+        rows.push(['ĐốiChiếu', dRowNum, status, dGdKhach || dGdNguon, detail + ' | MãKH:' + dMaKH]);
+      }
+    }
+    rows.push(['ĐốiChiếu', '', 'TỔNG', 'KH OK: ' + dTakenKH + ' | NCC OK: ' + dTakenNCC + ' | Skip: ' + dSkipped, 'Quét dòng ' + START_DC + ' → ' + dData.length]);
+  }
+
+  // ── AUDIT ĐỐI SOÁT ──
+  var crmIds = _loadCrmIds_();
+  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
+  var gdSheet = ssGD.getSheetByName('GD_KhachHang');
+  var gdData = gdSheet ? gdSheet.getDataRange().getValues() : [];
+  var dsSheet = ssGD.getSheetByName('DoiSoat_GD');
+  var dsData = dsSheet ? dsSheet.getDataRange().getValues() : [];
+
+  var dsSet = {};
+  for (var dd = 1; dd < dsData.length; dd++) {
+    var dsMaGd = (dsData[dd][0] || '').toString().trim();
+    if (dsMaGd) dsSet[dsMaGd] = true;
+  }
+
+  var dsTotal = 0, dsMissing = 0;
+  for (var gg = 1; gg < gdData.length; gg++) {
+    var gMaGd = (gdData[gg][0] || '').toString().trim();
+    var gLoai = (gdData[gg][2] || '').toString().trim();
+    var gHttt = (gdData[gg][3] || '').toString().trim();
+    if (_needsDoiSoat(gLoai, gHttt)) {
+      dsTotal++;
+      if (!dsSet[gMaGd]) {
+        dsMissing++;
+        rows.push(['DoiSoat', gg + 1, 'MISSING', gMaGd, gLoai + '/' + gHttt]);
+      }
+    }
+  }
+  rows.push(['DoiSoat', '', 'TỔNG', 'Cần: ' + dsTotal + ' | Có: ' + (dsTotal - dsMissing) + ' | Thiếu: ' + dsMissing, 'GD_KhachHang: ' + (gdData.length - 1) + ' dòng']);
+
+  // ── GHI TẤT CẢ VÀO SHEET ──
+  if (rows.length > 0) {
+    auditSheet.getRange(2, 1, rows.length, 5).setValues(rows);
+  }
+
+  Logger.log('=== AUDIT HOÀN TẤT — ' + rows.length + ' dòng ghi vào Audit_Log ===');
+}
