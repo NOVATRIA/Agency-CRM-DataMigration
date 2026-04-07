@@ -88,12 +88,10 @@ function _openCrm_(crmIds, key) {
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || '';
-  // Nếu chạy từ editor (không có param), default chạy resetAndRebuild + auditAll
+  // Nếu chạy từ editor (không có param), default chạy auditKHDetail
   if (!action) {
-    resetAndRebuild();
-    auditAll();
-    readAuditSummary();
-    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild + auditAll + readAuditSummary done.' }))
+    auditKHDetail();
+    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'auditKHDetail done. Check KH_Detail tab.' }))
       .setMimeType(ContentService.MimeType.JSON);
   }
   // Token check: bỏ qua nếu ADMIN_TOKEN chưa set trong CauHinh
@@ -1078,7 +1076,8 @@ function _readDoiChieu() {
 
     var gdKhach = (r[col['Giao dịch với khách']] || '').toString().trim();
     if (!gdKhach) continue;
-    if (gdKhach !== 'Khách Nạp tiền' && gdKhach !== 'Khách mua TK') continue;
+    var gdKhachLower = gdKhach.toLowerCase();
+    if (gdKhachLower !== 'khách nạp tiền' && gdKhachLower !== 'khách mua tk' && gdKhachLower !== 'refund') continue;
 
     var htttRaw = (r[col['Hình thức thanh toán']] || '').toString().trim();
     var httt = '';
@@ -1086,7 +1085,7 @@ function _readDoiChieu() {
       httt = 'tru_quy';
     } else if (htttRaw === 'Chuyển-Nhận') {
       httt = 'truc_tiep';
-    } else if (htttRaw && gdKhach === 'Khách mua TK') {
+    } else if (htttRaw && gdKhachLower === 'khách mua tk') {
       if (htttRaw.toLowerCase().indexOf('ghim') >= 0) continue;
     }
 
@@ -1100,20 +1099,26 @@ function _readDoiChieu() {
     var soTienGoc = _parseNumber(r[col['Số tiền nạp (chưa tính % phí)']]);
     var tongKHChuyen = _parseNumber(r[col['Số tiền (Tổng)']]);
     var soLuongTK = parseInt(r[col['Số lượng TK']]) || 0;
-    // Hệ thống cũ không lưu tên KH riêng, chỉ có mã KH
     var nguon = (r[col['Tên nguồn (Tài khoản)']] || '').toString().trim();
     var nguoiTH = (r[col['Người thực hiện']] || '').toString().trim();
     var ghiChu = (r[col['Ghi chú']] || '').toString().trim();
     var cidRaw = (r[col['ID Tài khoản ( Nếu nạp quỹ thì ghi - )']] || '').toString().trim();
 
-    if (gdKhach === 'Khách Nạp tiền') {
+    if (gdKhachLower === 'khách nạp tiền') {
       rows.push({
         ngay: ngay, ma_kh: maKH, ten_kh: '', cid: '',
         so_tien: soTienGoc, phi: phi, tong_kh_chuyen: tongKHChuyen,
         loai_gd: 'Nap_quy', httt: '', nguon: nguon,
         nguoi_th: nguoiTH, ghi_chu: ghiChu, source: 'doichieu'
       });
-    } else if (gdKhach === 'Khách mua TK') {
+    } else if (gdKhachLower === 'refund') {
+      rows.push({
+        ngay: ngay, ma_kh: maKH, ten_kh: '', cid: '',
+        so_tien: soTienGoc, phi: 0, tong_kh_chuyen: soTienGoc,
+        loai_gd: 'Refund', httt: '', nguon: nguon,
+        nguoi_th: nguoiTH, ghi_chu: ghiChu, source: 'doichieu'
+      });
+    } else if (gdKhachLower === 'khách mua tk') {
       var cids = _parseCIDs(cidRaw, i + 1, 'Đối chiếu');
       var divisor = soLuongTK > 1 ? soLuongTK : 1;
       var soTienPerCID = soTienGoc / divisor;
@@ -1183,11 +1188,12 @@ function _readDoiChieuNCC() {
 
     var gdNguon = (r[col['Giao dịch với Nguồn']] || '').toString().trim();
     if (!gdNguon) continue;
+    var gdNguonLower = gdNguon.toLowerCase();
 
     var loaiGD = '';
-    if (gdNguon === 'Nạp tiền cho nguồn') {
+    if (gdNguonLower === 'nạp tiền cho nguồn') {
       loaiGD = 'Nap_quy';
-    } else if (gdNguon === 'Mua Tài khoản') {
+    } else if (gdNguonLower === 'mua tài khoản') {
       loaiGD = 'Mua_TK';
     } else {
       continue;
@@ -2408,6 +2414,100 @@ function _logSkip(map, rowNum, reason) {
 /**
  * Đọc Audit_Log và in tóm tắt vào Logger
  */
+/**
+ * Phân tích chi tiết các KH chênh lệch quỹ — ghi vào sheet KH_Detail
+ * Với mỗi KH chênh lệch: liệt kê quỹ gốc + từng GD + tổng CRM vs KT
+ */
+function auditKHDetail() {
+  var logSS = _getLogSpreadsheet_();
+
+  // Đọc Warning_Log để lấy danh sách KH chênh lệch
+  var warnSheet = logSS.getSheetByName('Warning_Log');
+  if (!warnSheet) { Logger.log('Warning_Log chưa có'); return; }
+  var warnData = warnSheet.getDataRange().getValues();
+
+  var khList = []; // { ma_kh, quy_crm, quy_kt, chenh_lech }
+  for (var w = 1; w < warnData.length; w++) {
+    var maKH = (warnData[w][1] || '').toString().trim();
+    if (!maKH || !MA_KH_REGEX.test(maKH)) continue;
+    khList.push({
+      ma_kh: maKH,
+      quy_crm: parseFloat(warnData[w][2]) || 0,
+      quy_kt: parseFloat(warnData[w][3]) || 0,
+      chenh_lech: parseFloat(warnData[w][4]) || 0
+    });
+  }
+
+  if (khList.length === 0) { Logger.log('Không có KH chênh lệch'); return; }
+
+  // Sort theo |chênh lệch| lớn nhất, lấy top 20
+  khList.sort(function(a, b) { return Math.abs(b.chenh_lech) - Math.abs(a.chenh_lech); });
+  var topKH = khList.slice(0, 20);
+
+  // Đọc dữ liệu CRM
+  var crmIds = _loadCrmIds_();
+  var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
+  var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
+  var khData = sheetKH.getDataRange().getValues();
+  var khMap = {};
+  for (var k = 1; k < khData.length; k++) {
+    var mk = (khData[k][0] || '').toString().trim();
+    if (mk) khMap[mk] = { quy_goc: parseFloat(khData[k][4]) || 0, quy_hien_tai: parseFloat(khData[k][3]) || 0 };
+  }
+
+  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
+  var sheetGD = ssGD.getSheetByName('GD_KhachHang');
+  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
+
+  // Đọc quỹ gốc từ Tổng hợp
+  var quyGocMap = _readQuyGoc();
+
+  // Tạo sheet KH_Detail
+  var detailSheet = logSS.getSheetByName('KH_Detail');
+  if (detailSheet) logSS.deleteSheet(detailSheet);
+  detailSheet = logSS.insertSheet('KH_Detail');
+
+  var rows = [['Mã KH', 'Loại', 'Ngày', 'Loại GD', 'HTTT', 'Số tiền', 'Biến động', 'Quỹ sau', 'Ghi chú']];
+
+  topKH.forEach(function(kh) {
+    var mk = kh.ma_kh;
+    var info = khMap[mk] || { quy_goc: 0, quy_hien_tai: 0 };
+    var quyGocTH = quyGocMap[mk] !== undefined ? quyGocMap[mk] : 'N/A';
+
+    // Header cho KH
+    rows.push([mk, '=== TỔNG ===', '', 'CRM: ' + kh.quy_crm, 'KT: ' + kh.quy_kt, 'Lệch: ' + kh.chenh_lech, '', '', '']);
+    rows.push([mk, 'QUỸ GỐC CRM', '', '', '', info.quy_goc, '', '', 'Tổng hợp IH: ' + quyGocTH]);
+
+    // Liệt kê từng GD
+    var gdCount = 0;
+    var tongBD = 0;
+    for (var g = 1; g < gdData.length; g++) {
+      var gdMK = (gdData[g][1] || '').toString().trim();
+      if (gdMK !== mk) continue;
+      var loai = (gdData[g][2] || '').toString().trim();
+      var httt = (gdData[g][3] || '').toString().trim();
+      var soTien = parseFloat(gdData[g][5]) || 0;
+      var bienDong = parseFloat(gdData[g][9]) || 0;
+      var quySau = parseFloat(gdData[g][10]) || 0;
+      var ngay = gdData[g][14];
+      var ngayStr = (ngay instanceof Date) ? Utilities.formatDate(ngay, TZ, 'dd/MM/yyyy') : String(ngay || '');
+
+      tongBD += bienDong;
+      gdCount++;
+      rows.push([mk, 'GD', ngayStr, loai, httt, soTien, bienDong, quySau, '']);
+    }
+
+    rows.push([mk, 'TỔNG GD', '', gdCount + ' GD', '', '', tongBD, info.quy_goc + tongBD, 'quy_goc + tongBD']);
+    rows.push(['', '', '', '', '', '', '', '', '']); // dòng trống
+  });
+
+  detailSheet.getRange(1, 1, rows.length, 9).setValues(rows);
+  detailSheet.getRange(1, 1, 1, 9).setFontWeight('bold').setBackground('#1565C0').setFontColor('#FFFFFF');
+  detailSheet.setFrozenRows(1);
+
+  Logger.log('auditKHDetail: ' + topKH.length + ' KH, ' + rows.length + ' dòng → KH_Detail');
+}
+
 function readAuditSummary() {
   var logSS = _getLogSpreadsheet_();
   var sheet = logSS.getSheetByName('Audit_Log');
