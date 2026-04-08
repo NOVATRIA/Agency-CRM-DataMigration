@@ -29,22 +29,11 @@ var TAB_DOI_CHIEU = 'Đối chiếu T.chính';
 var TAB_TK_KHO = 'TK trong kho';
 
 // ── CẤU HÌNH NGÀY ──────────────────────────────────────────
-// Migrate theo tháng: đổi DATE_FROM + DATE_TO khi mở rộng phạm vi
-//
-// Tháng 1: DATE_FROM = 01/01/2026, DATE_TO = 31/01/2026
-// Tháng 2: DATE_FROM = 01/01/2026, DATE_TO = 28/02/2026
-// Tháng 3: DATE_FROM = 01/01/2026, DATE_TO = 31/03/2026
-// Tháng 4: DATE_FROM = 01/01/2026, DATE_TO = 07/04/2026 (hoặc ngày cuối)
-//
-var DATE_FROM = new Date(2026, 0, 1);    // 01/01/2026 — cố định
-var DATE_TO   = new Date(2026, 0, 31);   // 31/01/2026 — đổi khi mở rộng
-
-// Quỹ gốc cố định = 31/12/2025 (không đổi)
-var QUY_GOC_DATE = new Date(2025, 11, 31); // 31/12/2025
-
-// Filter KH: điền mã KH để test 1 KH, hoặc 'ALL' để lấy tất cả
-var FILTER_KH = 'ALL';
-// var FILTER_KH = 'LLK-012605';  // ← ví dụ: chỉ test KH này
+var DATE_FROM      = new Date(2026, 0, 1);    // 01/01/2026 — lấy GD từ ngày này
+var QUY_GOC_DATE   = new Date(2025, 11, 31);  // 31/12/2025 — quỹ gốc cố định
+var KICKOFF_DATE   = new Date(2026, 2, 31);   // 31/03/2026 — ngày tạo GD cân bằng
+var DOICHIEU_FROM  = new Date(2026, 3, 1);    // 01/04/2026 — đối chiếu từng ngày từ đây
+// DATE_TO: tự tìm ngày cuối cùng có data trong "Tổng hợp"
 // ────────────────────────────────────────────────────────────
 
 // Mã KH đặc biệt = GD NCC → bỏ qua
@@ -104,44 +93,19 @@ function _openCrm_(crmIds, key) {
 
 function doGet(e) {
   var action = (e && e.parameter && e.parameter.action) || '';
-  // Nếu chạy từ editor (không có param), default chạy resetAndRebuild + audit
-  if (!action) {
-    resetAndRebuild();
-    auditAll();
-    readAuditSummary();
-    auditKHDetail();
-    return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild + audit done.' }))
-      .setMimeType(ContentService.MimeType.JSON);
-  }
-  // Token check: bỏ qua nếu ADMIN_TOKEN chưa set trong CauHinh
-  var expectedToken = _readCauHinh('ADMIN_TOKEN');
-  if (expectedToken) {
-    var token = (e && e.parameter && e.parameter.admin_token) || '';
-    if (token !== expectedToken) {
-      return ContentService.createTextOutput(JSON.stringify({ error: 'Unauthorized' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-  }
+
+  // Chạy từ editor (không có param) → resetAndRebuild
+  if (!action) action = 'resetAndRebuild';
 
   try {
-    if (action === 'auditAll') {
-      auditAll();
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'auditAll() completed. Check MigrationLogs/Audit_Log' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
     if (action === 'resetAndRebuild') {
       resetAndRebuild();
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild() completed.' }))
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'resetAndRebuild done.' }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     if (action === 'buildAll') {
       buildAll();
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'buildAll() completed.' }))
-        .setMimeType(ContentService.MimeType.JSON);
-    }
-    if (action === 'readAuditSummary') {
-      readAuditSummary();
-      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'readAuditSummary done. Check Audit_Summary tab.' }))
+      return ContentService.createTextOutput(JSON.stringify({ success: true, message: 'buildAll done.' }))
         .setMimeType(ContentService.MimeType.JSON);
     }
     return ContentService.createTextOutput(JSON.stringify({ error: 'Unknown action: ' + action }))
@@ -297,6 +261,36 @@ function resetAndRebuild() {
 
   // 9. Chạy buildAll() để sync lại từ nguồn
   buildAll();
+
+  // 10. Tạo GD Kick-Off CRM (cân bằng quỹ tại KICKOFF_DATE)
+  var crmIds2 = _loadCrmIds_();
+  var nccMap2 = _readNccMap();
+  var kickKH = _createKickOffKH(crmIds2);
+  var kickNCC = _createKickOffNCC(crmIds2, nccMap2);
+
+  // 11. Recompute lại sau Kick-Off
+  if (kickKH > 0 || kickNCC > 0) {
+    var nccQuyGocMap2 = _importQuyGocNCC(crmIds2, nccMap2) || {};
+    var allKHs = [];
+    var ssKH3 = _openCrm_(crmIds2, 'KHACH_HANG');
+    var khD3 = ssKH3.getSheetByName('DanhMuc_KH').getDataRange().getValues();
+    for (var k3 = 1; k3 < khD3.length; k3++) {
+      var mk3 = (khD3[k3][0] || '').toString().trim();
+      if (mk3) allKHs.push(mk3);
+    }
+    _recomputeQuyKH(crmIds2, allKHs);
+
+    var allNCCs = [];
+    var ssNCC3 = _openCrm_(crmIds2, 'NHA_CUNG_CAP');
+    var nccD3 = ssNCC3.getSheetByName('DanhMuc_NCC').getDataRange().getValues();
+    for (var n3 = 1; n3 < nccD3.length; n3++) {
+      var mn3 = (nccD3[n3][0] || '').toString().trim();
+      if (mn3) allNCCs.push(mn3);
+    }
+    _recomputeQuyNCC(crmIds2, allNCCs, nccQuyGocMap2);
+
+    Logger.log('Recompute sau Kick-Off: ' + allKHs.length + ' KH, ' + allNCCs.length + ' NCC');
+  }
 }
 
 /**
@@ -317,20 +311,6 @@ function _clearSheetData_(crmIds, configKey, sheetName) {
   Logger.log(sheetName + ': xoá ' + (lastRow - 1) + ' dòng');
 }
 
-/**
- * Xoá giá trị các cột chỉ định từ dòng 2 trở xuống (giữ dòng nguyên)
- */
-function _clearColumns_(crmIds, configKey, sheetName, columns) {
-  var ss = _openCrm_(crmIds, configKey);
-  var sheet = ss.getSheetByName(sheetName);
-  if (!sheet) return;
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return;
-  columns.forEach(function(col) {
-    sheet.getRange(2, col, lastRow - 1, 1).clearContent();
-  });
-  Logger.log(sheetName + ': xoá ' + columns.length + ' cột (' + (lastRow - 1) + ' dòng)');
-}
 
 // ============================================================
 // SINH MÃ GD — Format: {prefix}-YYYYMMDD-NNN
@@ -476,7 +456,7 @@ function _syncKho(crmIds, allRows, nccMap, khoData) {
   khoData.forEach(function(tk) {
     if (existing[tk.cid]) return; // đã có trong CRM
     // Chỉ lấy CID nhập từ 01/01/2026
-    if (tk.ngay_nhap && tk.ngay_nhap instanceof Date && (tk.ngay_nhap < DATE_FROM || tk.ngay_nhap > DATE_TO)) return;
+    if (tk.ngay_nhap && tk.ngay_nhap instanceof Date && tk.ngay_nhap < DATE_FROM) return;
 
     var maNcc = _lookupNcc(nccMap, tk.ten_group);
     if (!maNcc && tk.ten_group) {
@@ -792,6 +772,25 @@ function _syncGDNCC(crmIds, nccGDRows, nccMap) {
   if (newRows.length > 0) {
     var lastRow = sheet.getLastRow();
     sheet.getRange(lastRow + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+
+    // Ghi DoiSoat_GD cho NCC (giống KH)
+    var dsRows = [];
+    newRows.forEach(function(row) {
+      var gdLoai = row[3];  // loai_gd
+      var gdHttt = row[4];  // hinh_thuc_tt
+      if (_needsDoiSoat(gdLoai, gdHttt)) {
+        dsRows.push([row[0], 'Da_doi_soat']); // [ma_gd, trang_thai_doi_soat]
+      }
+    });
+    if (dsRows.length > 0) {
+      var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
+      var sheetDoi = ssDoi.getSheetByName('DoiSoat_GD');
+      if (sheetDoi) {
+        var lastDoi = sheetDoi.getLastRow();
+        sheetDoi.getRange(lastDoi + 1, 1, dsRows.length, dsRows[0].length).setValues(dsRows);
+        Logger.log('DoiSoat_GD (NCC): ' + dsRows.length + ' record mới');
+      }
+    }
   }
 
   Logger.log('SyncGDNCC: ' + newRows.length + ' GD NCC mới');
@@ -913,6 +912,155 @@ function _recomputeQuyKH(crmIds, affectedMaKHs) {
 }
 
 // ============================================================
+// KICK-OFF CRM — Tạo GD cân bằng ngày 31/03 cho KH chênh lệch
+// ============================================================
+
+/**
+ * So sánh quỹ CRM (sau recompute) với cột KICKOFF_DATE trong "Tổng hợp".
+ * Nếu chênh lệch → tạo GD "Kick_Off" ngày KICKOFF_DATE để cân bằng.
+ */
+function _createKickOffKH(crmIds) {
+  // Đọc quỹ KT tại KICKOFF_DATE
+  var source = SpreadsheetApp.openById(SOURCE_ID);
+  var sheetTH = source.getSheetByName(TAB_TONG_HOP);
+  if (!sheetTH) return;
+  var thData = sheetTH.getDataRange().getValues();
+  var headerRow = thData[1];
+  var colKickOff = _findDateCol(headerRow, KICKOFF_DATE);
+  if (colKickOff < 0) {
+    Logger.log('WARNING: Không tìm thấy cột ' + Utilities.formatDate(KICKOFF_DATE, TZ, 'dd/MM/yyyy') + ' trong Tổng hợp');
+    return;
+  }
+
+  var ktMap = {}; // { ma_kh: quỹ KT tại KICKOFF_DATE }
+  for (var i = 5; i < thData.length; i++) {
+    var mk = _fixMaKH((thData[i][3] || '').toString().trim());
+    if (!mk || !MA_KH_REGEX.test(mk)) continue;
+    ktMap[mk] = parseFloat(thData[i][colKickOff]) || 0;
+  }
+
+  // Đọc quỹ CRM hiện tại
+  var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
+  var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
+  var khData = sheetKH.getDataRange().getValues();
+
+  // Tìm KH chênh lệch → tạo GD Kick-Off
+  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
+  var sheetGD = ssGD.getSheetByName('GD_KhachHang');
+  _initCountersFromExisting_(sheetGD, 'GD-KH');
+
+  var newRows = [];
+  var dsRows = [];
+  for (var j = 1; j < khData.length; j++) {
+    var maKH = (khData[j][0] || '').toString().trim();
+    if (!maKH || ktMap[maKH] === undefined) continue;
+    var quyCRM = parseFloat(khData[j][3]) || 0; // quy_hien_tai
+    var quyKT = ktMap[maKH];
+    var diff = quyKT - quyCRM;
+    if (Math.abs(diff) < 0.01) continue; // khớp rồi
+
+    var maGd = _generateMaGD_('GD-KH', KICKOFF_DATE);
+    var loai = diff > 0 ? 'Nap_quy' : 'Refund';
+    var soTien = Math.abs(diff);
+
+    newRows.push([
+      maGd, maKH, loai, '', '', soTien, 0, soTien,
+      '', '', '', 'Hoan_thanh', 'Migration', 'Kick-Off CRM',
+      KICKOFF_DATE, KICKOFF_DATE
+    ]);
+    dsRows.push([maGd, 'Da_doi_soat']);
+  }
+
+  if (newRows.length > 0) {
+    var lastRow = sheetGD.getLastRow();
+    sheetGD.getRange(lastRow + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+
+    // Ghi DoiSoat
+    var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
+    var sheetDoi = ssDoi.getSheetByName('DoiSoat_GD');
+    if (sheetDoi && dsRows.length > 0) {
+      var lastDoi = sheetDoi.getLastRow();
+      sheetDoi.getRange(lastDoi + 1, 1, dsRows.length, dsRows[0].length).setValues(dsRows);
+    }
+  }
+
+  Logger.log('Kick-Off KH: ' + newRows.length + ' GD cân bằng tạo ngày ' + Utilities.formatDate(KICKOFF_DATE, TZ, 'dd/MM/yyyy'));
+  return newRows.length;
+}
+
+/**
+ * Tương tự cho NCC
+ */
+function _createKickOffNCC(crmIds, nccMap) {
+  var source = SpreadsheetApp.openById(SOURCE_ID);
+  var sheetNguon = source.getSheetByName(TAB_NGUON);
+  if (!sheetNguon) return;
+  var nguonData = sheetNguon.getDataRange().getValues();
+  var headerRow = nguonData[0];
+  var colKickOff = _findDateCol(headerRow, KICKOFF_DATE);
+  if (colKickOff < 0) {
+    Logger.log('WARNING: Không tìm thấy cột ' + Utilities.formatDate(KICKOFF_DATE, TZ, 'dd/MM/yyyy') + ' trong Nguồn');
+    return;
+  }
+
+  var ktNCCMap = {};
+  for (var i = 3; i < nguonData.length; i++) {
+    var tenNguon = (nguonData[i][1] || '').toString().trim();
+    if (!tenNguon) continue;
+    var maNcc = _lookupNcc(nccMap, tenNguon);
+    if (!maNcc) continue;
+    ktNCCMap[maNcc] = parseFloat(nguonData[i][colKickOff]) || 0;
+  }
+
+  // Đọc quỹ NCC hiện tại
+  var ssNCC = _openCrm_(crmIds, 'NHA_CUNG_CAP');
+  var sheetNCC = ssNCC.getSheetByName('DanhMuc_NCC');
+  var nccData = sheetNCC.getDataRange().getValues();
+
+  var ssGD = _openCrm_(crmIds, 'GD_NCC_' + NAM);
+  var sheetGD = ssGD.getSheetByName('GD_NhaCungCap');
+  _initCountersFromExisting_(sheetGD, 'GD-NCC');
+
+  var newRows = [];
+  var dsRows = [];
+  for (var j = 1; j < nccData.length; j++) {
+    var maNcc = (nccData[j][0] || '').toString().trim();
+    if (!maNcc || ktNCCMap[maNcc] === undefined) continue;
+    var quyCRM = parseFloat(nccData[j][11]) || 0; // cột L = quy_hien_tai
+    var quyKT = ktNCCMap[maNcc];
+    var diff = quyKT - quyCRM;
+    if (Math.abs(diff) < 0.01) continue;
+
+    var maGd = _generateMaGD_('GD-NCC', KICKOFF_DATE);
+    var loai = diff > 0 ? 'Nap_quy' : 'Refund';
+    var soTien = Math.abs(diff);
+
+    newRows.push([
+      maGd, KICKOFF_DATE, maNcc, loai, '', soTien, 0, soTien,
+      '', '', '', '', '', '', 'Hoan_thanh', 'Migration', 'Kick-Off CRM',
+      KICKOFF_DATE, 'Da_doi_soat', 'Migration', KICKOFF_DATE
+    ]);
+    // NCC cũng ghi vào DoiSoat_GD
+    dsRows.push([maGd, 'Da_doi_soat']);
+  }
+
+  if (newRows.length > 0) {
+    var lastRow = sheetGD.getLastRow();
+    sheetGD.getRange(lastRow + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
+
+    var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
+    var sheetDoi = ssDoi.getSheetByName('DoiSoat_GD');
+    if (sheetDoi && dsRows.length > 0) {
+      var lastDoi = sheetDoi.getLastRow();
+      sheetDoi.getRange(lastDoi + 1, 1, dsRows.length, dsRows[0].length).setValues(dsRows);
+    }
+  }
+
+  Logger.log('Kick-Off NCC: ' + newRows.length + ' GD cân bằng tạo ngày ' + Utilities.formatDate(KICKOFF_DATE, TZ, 'dd/MM/yyyy'));
+  return newRows.length;
+}
+
+// ============================================================
 // RECOMPUTE QUỸ NCC — Tính lại quỹ cho NCC có GD mới
 // ============================================================
 
@@ -1027,11 +1175,11 @@ function _readTopup() {
     var r = data[i];
 
     var ngay = _parseDate(r[col['Thời gian']]);
-    if (!ngay || ngay < DATE_FROM || ngay > DATE_TO) continue;
+    if (!ngay || ngay < DATE_FROM) continue;
 
     var maKH = _fixMaKH((r[col['Mã khách hàng']] || '').toString().trim());
     if (!maKH) continue;
-    if (!_matchKH(maKH)) continue;
+
     if (NCC_MA_KH.indexOf(maKH) >= 0) continue;
 
     var cid = _formatCID(r[col['ID Tài Khoản']]);
@@ -1088,11 +1236,11 @@ function _readDoiChieu() {
     var r = data[i];
 
     var ngay = _parseDate(r[col['Ngày']]);
-    if (!ngay || ngay < DATE_FROM || ngay > DATE_TO) continue;
+    if (!ngay || ngay < DATE_FROM) continue;
 
     var maKH = _fixMaKH((r[col['Mã KH']] || '').toString().trim());
     if (!maKH) continue;
-    if (!_matchKH(maKH)) continue;
+
     if (NCC_MA_KH.indexOf(maKH) >= 0) continue;
 
     var gdKhach = (r[col['Giao dịch với khách']] || '').toString().trim();
@@ -1205,7 +1353,7 @@ function _readDoiChieuNCC() {
     var r = data[i];
 
     var ngay = _parseDate(r[col['Ngày']]);
-    if (!ngay || ngay < DATE_FROM || ngay > DATE_TO) continue;
+    if (!ngay || ngay < DATE_FROM) continue;
 
     var gdNguon = (r[col['Giao dịch với Nguồn']] || '').toString().trim();
     if (!gdNguon) continue;
@@ -1421,6 +1569,27 @@ function _findDateCol(headerRow, targetDate) {
 }
 
 /**
+ * Tìm cột ngày cuối cùng có data trong header row
+ * Trả về { col: index, date: Date } hoặc null
+ */
+function _findLastDateCol(headerRow, startCol) {
+  startCol = startCol || 6;
+  var lastCol = -1;
+  var lastDate = null;
+  for (var c = startCol; c < headerRow.length; c++) {
+    var val = headerRow[c];
+    var d = null;
+    if (val instanceof Date && !isNaN(val.getTime())) {
+      d = val;
+    } else if (val) {
+      d = _parseDate(val.toString().trim());
+    }
+    if (d) { lastCol = c; lastDate = d; }
+  }
+  return lastCol >= 0 ? { col: lastCol, date: lastDate } : null;
+}
+
+/**
  * Đọc quỹ gốc từ tab "Tổng hợp" — cột tương ứng QUY_GOC_DATE
  * Trả về { ma_kh: quy_goc }
  */
@@ -1541,16 +1710,17 @@ function _doiChieuQuy(crmIds) {
   var data = sheet.getDataRange().getValues();
   if (data.length <= 5) return;
 
-  // Tìm cột DATE_TO trong dòng header ngày
+  // Tìm cột ngày cuối cùng có data trong Tổng hợp
   var headerRow = data[1];
   var colMaKH = 3; // D
-  var lastDateCol = _findDateCol(headerRow, DATE_TO);
-  var lastDateVal = Utilities.formatDate(DATE_TO, TZ, 'dd/MM/yyyy');
-  if (lastDateCol < 0) {
-    Logger.log('WARNING: Không tìm thấy cột ngày ' + lastDateVal + ' trong tab Tổng hợp');
+  var found = _findLastDateCol(headerRow);
+  if (!found) {
+    Logger.log('WARNING: Không tìm thấy cột ngày trong tab Tổng hợp');
     return;
   }
-  Logger.log('Đối chiếu KH: cột DATE_TO = ' + lastDateVal + ' (col index ' + lastDateCol + ')');
+  var lastDateCol = found.col;
+  var lastDateVal = Utilities.formatDate(found.date, TZ, 'dd/MM/yyyy');
+  Logger.log('Đối chiếu KH: cột cuối = ' + lastDateVal + ' (col index ' + lastDateCol + ')');
 
   // Đọc quỹ kế toán theo KH (bỏ qua KH không hoạt động + quỹ = 0)
   var colTTNapRut = 4;   // E
@@ -1569,8 +1739,7 @@ function _doiChieuQuy(crmIds) {
   }
   Logger.log('Đối chiếu KH: ' + Object.keys(ketoanMap).length + ' KH kế toán để so sánh');
 
-  // So sánh quỹ CRM (đã recompute) với quỹ KT tại DATE_TO
-  // GD đã filter bởi DATE_FROM→DATE_TO khi đọc nguồn → quy_hien_tai = quỹ đúng phạm vi
+  // So sánh quỹ CRM (đã recompute + Kick-Off) với quỹ KT ngày cuối
   var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
   var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
   var khData = sheetKH.getDataRange().getValues();
@@ -1634,7 +1803,6 @@ function _doiChieuQuy(crmIds) {
 // ============================================================
 
 var TAB_NGUON = 'Nguồn';
-// COL_QUY_GOC_NCC: tìm tự động theo QUY_GOC_DATE (giống Tổng hợp)
 
 function _doiChieuQuyNCC(crmIds, nccMap) {
   var source = SpreadsheetApp.openById(SOURCE_ID);
@@ -1652,13 +1820,14 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
   var headerRow = data[0]; // dòng 1
   var colTenNguon = 1; // B
 
-  // Tìm cột DATE_TO trong tab Nguồn
-  var lastDateCol = _findDateCol(headerRow, DATE_TO);
-  var lastDateVal = Utilities.formatDate(DATE_TO, TZ, 'dd/MM/yyyy');
-  if (lastDateCol < 0) {
-    Logger.log('WARNING: Không tìm thấy cột ngày ' + lastDateVal + ' trong tab Nguồn');
+  // Tìm cột ngày cuối cùng có data trong tab Nguồn
+  var foundNCC = _findLastDateCol(headerRow, 3);
+  if (!foundNCC) {
+    Logger.log('WARNING: Không tìm thấy cột ngày trong tab Nguồn');
     return;
   }
+  var lastDateCol = foundNCC.col;
+  var lastDateVal = Utilities.formatDate(foundNCC.date, TZ, 'dd/MM/yyyy');
 
   // Đọc quỹ kế toán NCC + quỹ gốc NCC
   var colQuyGocNCC = _findDateCol(data[0], QUY_GOC_DATE);
@@ -2014,15 +2183,6 @@ function _fixMaKH(maKH) {
   return maKH;
 }
 
-/**
- * Kiểm tra mã KH có match FILTER_KH không
- * FILTER_KH = 'ALL' → luôn true
- * FILTER_KH = 'LLK-012605' → chỉ true cho KH đó
- */
-function _matchKH(maKH) {
-  if (!FILTER_KH || FILTER_KH === 'ALL') return true;
-  return maKH === FILTER_KH;
-}
 
 function _parseCIDs(raw, rowNum, tab) {
   if (!raw || raw === '-') return [];
@@ -2104,571 +2264,4 @@ function _parseNumber(val) {
   return isNaN(n) ? 0 : n;
 }
 
-// ============================================================
-// AUDIT — Kiểm tra từng dòng nguồn, ghi rõ lý do bỏ qua
-// ============================================================
-
-/**
- * Chạy thủ công: auditTopup()
- * Quét TOÀN BỘ dòng trong tab Topup từ dòng 2604 trở xuống.
- * Ghi log mỗi dòng bị bỏ qua kèm lý do.
- */
-function auditTopup() {
-  var START_ROW = 2604; // dòng bắt đầu quét (1-based)
-  var source = SpreadsheetApp.openById(SOURCE_ID);
-  var sheet = source.getSheetByName(TAB_TOPUP);
-  if (!sheet) { Logger.log('ERROR: Không tìm thấy tab Topup'); return; }
-
-  var data = sheet.getDataRange().getValues();
-  var headers = data[0];
-  var col = {};
-  headers.forEach(function(h, i) { col[h.toString().trim()] = i; });
-
-  Logger.log('=== AUDIT TOPUP — Tổng dòng sheet: ' + data.length + ', quét từ dòng ' + START_ROW + ' ===');
-
-  var taken = 0, skipped = 0;
-  var skipReasons = {};
-
-  for (var i = START_ROW - 1; i < data.length; i++) { // index = row - 1
-    var r = data[i];
-    var rowNum = i + 1;
-
-    // Kiểm tra dòng trống hoàn toàn
-    var hasData = false;
-    for (var c = 0; c < r.length; c++) {
-      if (r[c] !== '' && r[c] !== null && r[c] !== undefined) { hasData = true; break; }
-    }
-    if (!hasData) {
-      _logSkip(skipReasons, rowNum, 'Dòng trống hoàn toàn');
-      skipped++;
-      continue;
-    }
-
-    var ngayRaw = r[col['Thời gian']];
-    var ngay = _parseDate(ngayRaw);
-    if (!ngay) {
-      _logSkip(skipReasons, rowNum, 'Ngày không hợp lệ: "' + ngayRaw + '"');
-      skipped++;
-      continue;
-    }
-    if (ngay < DATE_FROM) {
-      _logSkip(skipReasons, rowNum, 'Ngày < 01/01/2026: ' + ngay.toISOString().substring(0, 10));
-      skipped++;
-      continue;
-    }
-
-    var maKH = (r[col['Mã khách hàng']] || '').toString().trim();
-    if (!maKH) {
-      _logSkip(skipReasons, rowNum, 'Mã KH trống');
-      skipped++;
-      continue;
-    }
-    if (NCC_MA_KH.indexOf(maKH) >= 0) {
-      _logSkip(skipReasons, rowNum, 'Mã KH là NCC: ' + maKH);
-      skipped++;
-      continue;
-    }
-
-    var tinhTrang = (r[col['Tình trạng']] || '').toString().trim();
-    if (tinhTrang.toLowerCase() !== 'done') {
-      _logSkip(skipReasons, rowNum, 'Tình trạng ≠ Done: "' + tinhTrang + '"');
-      skipped++;
-      continue;
-    }
-
-    var yeuCau = (r[col['Yêu cầu']] || '').toString().trim().toUpperCase();
-    if (yeuCau !== 'DEPOSIT' && yeuCau !== 'WITHDRAW') {
-      _logSkip(skipReasons, rowNum, 'Yêu cầu ≠ DEPOSIT/WITHDRAW: "' + yeuCau + '"');
-      skipped++;
-      continue;
-    }
-
-    if (!MA_KH_REGEX.test(maKH)) {
-      _logSkip(skipReasons, rowNum, 'Mã KH sai format: "' + maKH + '"');
-      skipped++;
-      continue;
-    }
-
-    taken++;
-  }
-
-  Logger.log('=== KẾT QUẢ AUDIT TOPUP ===');
-  Logger.log('Tổng dòng quét: ' + (data.length - START_ROW + 1));
-  Logger.log('Dòng hợp lệ (taken): ' + taken);
-  Logger.log('Dòng bỏ qua (skipped): ' + skipped);
-  Logger.log('--- CHI TIẾT LÝ DO BỎ QUA ---');
-  Object.keys(skipReasons).forEach(function(reason) {
-    var rows = skipReasons[reason];
-    Logger.log(reason + ' (' + rows.length + ' dòng): ' + rows.slice(0, 20).join(', ') + (rows.length > 20 ? '...' : ''));
-  });
-}
-
-/**
- * Chạy thủ công: auditDoiChieu()
- * Quét TOÀN BỘ dòng trong tab "Đối chiếu T.chính" từ dòng 2371 trở xuống.
- */
-function auditDoiChieu() {
-  var START_ROW = 2371;
-  var source = SpreadsheetApp.openById(SOURCE_ID);
-  var sheet = source.getSheetByName(TAB_DOI_CHIEU);
-  if (!sheet) { Logger.log('ERROR: Không tìm thấy tab Đối chiếu'); return; }
-
-  var data = sheet.getDataRange().getValues();
-  var headers = data[0];
-  var col = {};
-  headers.forEach(function(h, i) { col[h.toString().trim()] = i; });
-
-  Logger.log('=== AUDIT ĐỐI CHIẾU — Tổng dòng sheet: ' + data.length + ', quét từ dòng ' + START_ROW + ' ===');
-
-  var takenKH = 0, takenNCC = 0, skipped = 0;
-  var skipReasons = {};
-
-  for (var i = START_ROW - 1; i < data.length; i++) {
-    var r = data[i];
-    var rowNum = i + 1;
-
-    var hasData = false;
-    for (var c = 0; c < r.length; c++) {
-      if (r[c] !== '' && r[c] !== null && r[c] !== undefined) { hasData = true; break; }
-    }
-    if (!hasData) {
-      _logSkip(skipReasons, rowNum, 'Dòng trống hoàn toàn');
-      skipped++;
-      continue;
-    }
-
-    var ngayRaw = r[col['Ngày']];
-    var ngay = _parseDate(ngayRaw);
-    if (!ngay) {
-      _logSkip(skipReasons, rowNum, 'Ngày không hợp lệ: "' + ngayRaw + '"');
-      skipped++;
-      continue;
-    }
-    if (ngay < DATE_FROM) {
-      _logSkip(skipReasons, rowNum, 'Ngày < 01/01/2026: ' + ngay.toISOString().substring(0, 10));
-      skipped++;
-      continue;
-    }
-
-    var maKH = (r[col['Mã KH']] || '').toString().trim();
-    var gdKhach = (r[col['Giao dịch với khách']] || '').toString().trim();
-    var gdNguon = (r[col['Giao dịch với Nguồn']] || '').toString().trim();
-
-    // ── Phần KH ──
-    if (gdKhach) {
-      if (!maKH) {
-        _logSkip(skipReasons, rowNum, 'KH: Mã KH trống (GD khách: ' + gdKhach + ')');
-        skipped++;
-      } else if (NCC_MA_KH.indexOf(maKH) >= 0) {
-        _logSkip(skipReasons, rowNum, 'KH: Mã KH là NCC: ' + maKH);
-        skipped++;
-      } else if (gdKhach !== 'Khách Nạp tiền' && gdKhach !== 'Khách mua TK') {
-        _logSkip(skipReasons, rowNum, 'KH: GD khách ≠ "Khách Nạp tiền"/"Khách mua TK": "' + gdKhach + '"');
-        skipped++;
-      } else {
-        var htttRaw = (r[col['Hình thức thanh toán']] || '').toString().trim();
-        if (htttRaw && gdKhach === 'Khách mua TK' && htttRaw.toLowerCase().indexOf('ghim') >= 0) {
-          _logSkip(skipReasons, rowNum, 'KH: Hình thức TT chứa "ghim": "' + htttRaw + '"');
-          skipped++;
-        } else if (!MA_KH_REGEX.test(maKH)) {
-          _logSkip(skipReasons, rowNum, 'KH: Mã KH sai format: "' + maKH + '"');
-          skipped++;
-        } else {
-          takenKH++;
-        }
-      }
-    }
-
-    // ── Phần NCC ──
-    if (gdNguon) {
-      if (gdNguon !== 'Nạp tiền cho nguồn' && gdNguon !== 'Mua Tài khoản') {
-        _logSkip(skipReasons, rowNum, 'NCC: GD nguồn ≠ "Nạp tiền cho nguồn"/"Mua Tài khoản": "' + gdNguon + '"');
-        // Không tăng skipped vì KH có thể đã tính ở trên
-      } else {
-        var htttNCC = (r[col['Hình thức thanh toán']] || '').toString().trim();
-        if (htttNCC.toLowerCase().indexOf('ghim') >= 0) {
-          _logSkip(skipReasons, rowNum, 'NCC: Hình thức TT chứa "ghim": "' + htttNCC + '"');
-        } else {
-          takenNCC++;
-        }
-      }
-    }
-
-    if (!gdKhach && !gdNguon) {
-      _logSkip(skipReasons, rowNum, 'Không có GD khách lẫn GD nguồn');
-      skipped++;
-    }
-  }
-
-  Logger.log('=== KẾT QUẢ AUDIT ĐỐI CHIẾU ===');
-  Logger.log('Tổng dòng quét: ' + (data.length - START_ROW + 1));
-  Logger.log('GD KH hợp lệ: ' + takenKH);
-  Logger.log('GD NCC hợp lệ: ' + takenNCC);
-  Logger.log('Dòng bỏ qua: ' + skipped);
-  Logger.log('--- CHI TIẾT LÝ DO BỎ QUA ---');
-  Object.keys(skipReasons).forEach(function(reason) {
-    var rows = skipReasons[reason];
-    Logger.log(reason + ' (' + rows.length + ' dòng): ' + rows.slice(0, 20).join(', ') + (rows.length > 20 ? '...' : ''));
-  });
-}
-
-/**
- * Chạy thủ công: auditDoiSoat()
- * Kiểm tra GD KH trong CRM nào cần đối soát nhưng chưa có trong DoiSoat_GD
- */
-function auditDoiSoat() {
-  var crmIds = _loadCrmIds_();
-  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
-
-  var sheetGD = ssGD.getSheetByName('GD_KhachHang');
-  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
-
-  var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
-  var sheetDS = ssDoi.getSheetByName('DoiSoat_GD');
-  var dsData = sheetDS ? sheetDS.getDataRange().getValues() : [];
-
-  // Build set of ma_gd đã có trong DoiSoat_GD
-  var dsSet = {};
-  for (var d = 1; d < dsData.length; d++) {
-    var maGdDS = (dsData[d][0] || '').toString().trim();
-    if (maGdDS) dsSet[maGdDS] = true;
-  }
-
-  Logger.log('=== AUDIT ĐỐI SOÁT ===');
-  Logger.log('GD_KhachHang: ' + (gdData.length - 1) + ' dòng');
-  Logger.log('DoiSoat_GD: ' + Object.keys(dsSet).length + ' record');
-
-  var missing = [];
-  var total = 0;
-  for (var g = 1; g < gdData.length; g++) {
-    var maGd = (gdData[g][0] || '').toString().trim();
-    var loai = (gdData[g][2] || '').toString().trim();
-    var httt = (gdData[g][3] || '').toString().trim();
-
-    if (_needsDoiSoat(loai, httt)) {
-      total++;
-      if (!dsSet[maGd]) {
-        missing.push(maGd + ' (dòng ' + (g + 1) + ', loại: ' + loai + ', httt: ' + httt + ')');
-      }
-    }
-  }
-
-  Logger.log('GD cần đối soát: ' + total);
-  Logger.log('Đã có trong DoiSoat_GD: ' + (total - missing.length));
-  Logger.log('THIẾU trong DoiSoat_GD: ' + missing.length);
-  if (missing.length > 0) {
-    Logger.log('--- DANH SÁCH THIẾU ---');
-    missing.forEach(function(m) { Logger.log(m); });
-  }
-}
-
-function _logSkip(map, rowNum, reason) {
-  if (!map[reason]) map[reason] = [];
-  map[reason].push(rowNum);
-}
-
-/**
- * Đọc Audit_Log và in tóm tắt vào Logger
- */
-/**
- * Phân tích chi tiết các KH chênh lệch quỹ — ghi vào sheet KH_Detail
- * Với mỗi KH chênh lệch: liệt kê quỹ gốc + từng GD + tổng CRM vs KT
- */
-function auditKHDetail() {
-  var logSS = _getLogSpreadsheet_();
-
-  // Đọc Warning_Log để lấy danh sách KH chênh lệch
-  var warnSheet = logSS.getSheetByName('Warning_Log');
-  if (!warnSheet) { Logger.log('Warning_Log chưa có'); return; }
-  var warnData = warnSheet.getDataRange().getValues();
-
-  var khList = []; // { ma_kh, quy_crm, quy_kt, chenh_lech }
-  for (var w = 1; w < warnData.length; w++) {
-    var maKH = (warnData[w][1] || '').toString().trim();
-    if (!maKH || !MA_KH_REGEX.test(maKH)) continue;
-    khList.push({
-      ma_kh: maKH,
-      quy_crm: parseFloat(warnData[w][2]) || 0,
-      quy_kt: parseFloat(warnData[w][3]) || 0,
-      chenh_lech: parseFloat(warnData[w][4]) || 0
-    });
-  }
-
-  if (khList.length === 0) { Logger.log('Không có KH chênh lệch'); return; }
-
-  // Sort theo |chênh lệch| lớn nhất, lấy top 20
-  khList.sort(function(a, b) { return Math.abs(b.chenh_lech) - Math.abs(a.chenh_lech); });
-  var topKH = khList.slice(0, 20);
-
-  // Đọc dữ liệu CRM
-  var crmIds = _loadCrmIds_();
-  var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
-  var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
-  var khData = sheetKH.getDataRange().getValues();
-  var khMap = {};
-  for (var k = 1; k < khData.length; k++) {
-    var mk = (khData[k][0] || '').toString().trim();
-    if (mk) khMap[mk] = { quy_goc: parseFloat(khData[k][4]) || 0, quy_hien_tai: parseFloat(khData[k][3]) || 0 };
-  }
-
-  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
-  var sheetGD = ssGD.getSheetByName('GD_KhachHang');
-  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
-
-  // Đọc quỹ gốc từ Tổng hợp
-  var quyGocMap = _readQuyGoc();
-
-  // Tạo sheet KH_Detail
-  var detailSheet = logSS.getSheetByName('KH_Detail');
-  if (detailSheet) logSS.deleteSheet(detailSheet);
-  detailSheet = logSS.insertSheet('KH_Detail');
-
-  var rows = [['Mã KH', 'Loại', 'Ngày', 'Loại GD', 'HTTT', 'Số tiền', 'Biến động', 'Quỹ sau', 'Ghi chú']];
-
-  topKH.forEach(function(kh) {
-    var mk = kh.ma_kh;
-    var info = khMap[mk] || { quy_goc: 0, quy_hien_tai: 0 };
-    var quyGocTH = quyGocMap[mk] !== undefined ? quyGocMap[mk] : 'N/A';
-
-    // Header cho KH
-    rows.push([mk, '=== TỔNG ===', '', 'CRM: ' + kh.quy_crm, 'KT: ' + kh.quy_kt, 'Lệch: ' + kh.chenh_lech, '', '', '']);
-    rows.push([mk, 'QUỸ GỐC CRM', '', '', '', info.quy_goc, '', '', 'Tổng hợp IH: ' + quyGocTH]);
-
-    // Liệt kê từng GD
-    var gdCount = 0;
-    var tongBD = 0;
-    for (var g = 1; g < gdData.length; g++) {
-      var gdMK = (gdData[g][1] || '').toString().trim();
-      if (gdMK !== mk) continue;
-      var loai = (gdData[g][2] || '').toString().trim();
-      var httt = (gdData[g][3] || '').toString().trim();
-      var soTien = parseFloat(gdData[g][5]) || 0;
-      var bienDong = parseFloat(gdData[g][9]) || 0;
-      var quySau = parseFloat(gdData[g][10]) || 0;
-      var ngay = gdData[g][14];
-      var ngayStr = (ngay instanceof Date) ? Utilities.formatDate(ngay, TZ, 'dd/MM/yyyy') : String(ngay || '');
-
-      tongBD += bienDong;
-      gdCount++;
-      rows.push([mk, 'GD', ngayStr, loai, httt, soTien, bienDong, quySau, '']);
-    }
-
-    rows.push([mk, 'TỔNG GD', '', gdCount + ' GD', '', '', tongBD, info.quy_goc + tongBD, 'quy_goc + tongBD']);
-    rows.push(['', '', '', '', '', '', '', '', '']); // dòng trống
-  });
-
-  detailSheet.getRange(1, 1, rows.length, 9).setValues(rows);
-  detailSheet.getRange(1, 1, 1, 9).setFontWeight('bold').setBackground('#1565C0').setFontColor('#FFFFFF');
-  detailSheet.setFrozenRows(1);
-
-  Logger.log('auditKHDetail: ' + topKH.length + ' KH, ' + rows.length + ' dòng → KH_Detail');
-}
-
-function readAuditSummary() {
-  var logSS = _getLogSpreadsheet_();
-  var sheet = logSS.getSheetByName('Audit_Log');
-  if (!sheet) return;
-  var data = sheet.getDataRange().getValues();
-
-  var stats = {};
-  var skipReasons = {};
-  var summaryRows = [];
-
-  for (var i = 1; i < data.length; i++) {
-    var nguon = (data[i][0] || '').toString().trim();
-    var trangThai = (data[i][2] || '').toString().trim();
-    var lyDo = (data[i][3] || '').toString().trim();
-
-    if (trangThai === 'TỔNG') {
-      summaryRows.push([nguon, lyDo, (data[i][4] || '').toString()]);
-      continue;
-    }
-
-    var key = nguon + '|' + trangThai;
-    stats[key] = (stats[key] || 0) + 1;
-
-    if (trangThai === 'SKIP' || trangThai === 'MISSING') {
-      var rKey = nguon + '|' + lyDo;
-      skipReasons[rKey] = (skipReasons[rKey] || 0) + 1;
-    }
-  }
-
-  // Ghi vào sheet Audit_Summary
-  var sumSheet = logSS.getSheetByName('Audit_Summary');
-  if (sumSheet) logSS.deleteSheet(sumSheet);
-  sumSheet = logSS.insertSheet('Audit_Summary');
-
-  var rows = [['Loại', 'Nội dung', 'Số lượng']];
-
-  rows.push(['--- TỔNG KẾT ---', '', '']);
-  summaryRows.forEach(function(s) { rows.push(['TỔNG ' + s[0], s[1], s[2]]); });
-
-  rows.push(['', '', '']);
-  rows.push(['--- THỐNG KÊ ---', '', '']);
-  Object.keys(stats).sort().forEach(function(k) { rows.push([k, '', stats[k]]); });
-
-  rows.push(['', '', '']);
-  rows.push(['--- LÝ DO BỎ QUA ---', '', '']);
-  Object.keys(skipReasons).sort().forEach(function(k) { rows.push([k, '', skipReasons[k]]); });
-
-  sumSheet.getRange(1, 1, rows.length, 3).setValues(rows);
-  sumSheet.getRange(1, 1, 1, 3).setFontWeight('bold');
-}
-
-/**
- * Chạy thủ công: auditAll()
- * Chạy cả 3 audit + ghi kết quả chi tiết vào MigrationLogs/Audit_Log
- * Dùng khi không thể xem Logger.log trực tiếp.
- */
-function auditAll() {
-  var logSS = _getLogSpreadsheet_();
-  var auditSheet = logSS.getSheetByName('Audit_Log');
-  if (auditSheet) logSS.deleteSheet(auditSheet);
-  auditSheet = logSS.insertSheet('Audit_Log');
-  auditSheet.getRange(1, 1, 1, 5).setValues([['Nguồn', 'Dòng', 'Trạng thái', 'Lý do', 'Chi tiết']]);
-  auditSheet.getRange(1, 1, 1, 5).setBackground('#1565C0').setFontColor('#FFFFFF').setFontWeight('bold');
-  auditSheet.setFrozenRows(1);
-
-  var rows = [];
-
-  // ── AUDIT TOPUP ──
-  var START_TOPUP = 2604;
-  var source = SpreadsheetApp.openById(SOURCE_ID);
-  var sheetTopup = source.getSheetByName(TAB_TOPUP);
-  if (sheetTopup) {
-    var tData = sheetTopup.getDataRange().getValues();
-    var tHeaders = tData[0];
-    var tCol = {};
-    tHeaders.forEach(function(h, i) { tCol[h.toString().trim()] = i; });
-
-    var tTaken = 0, tSkipped = 0;
-    for (var ti = START_TOPUP - 1; ti < tData.length; ti++) {
-      var tr = tData[ti];
-      var tRowNum = ti + 1;
-
-      var tHasData = false;
-      for (var tc = 0; tc < tr.length; tc++) {
-        if (tr[tc] !== '' && tr[tc] !== null && tr[tc] !== undefined) { tHasData = true; break; }
-      }
-      if (!tHasData) { rows.push(['Topup', tRowNum, 'SKIP', 'Dòng trống', '']); tSkipped++; continue; }
-
-      var tNgayRaw = tr[tCol['Thời gian']];
-      var tNgay = _parseDate(tNgayRaw);
-      if (!tNgay) { rows.push(['Topup', tRowNum, 'SKIP', 'Ngày không hợp lệ', String(tNgayRaw)]); tSkipped++; continue; }
-      if (tNgay < DATE_FROM) { rows.push(['Topup', tRowNum, 'SKIP', 'Ngày < 2026', tNgay.toISOString().substring(0,10)]); tSkipped++; continue; }
-
-      var tMaKH = (tr[tCol['Mã khách hàng']] || '').toString().trim();
-      if (!tMaKH) { rows.push(['Topup', tRowNum, 'SKIP', 'Mã KH trống', '']); tSkipped++; continue; }
-      if (NCC_MA_KH.indexOf(tMaKH) >= 0) { rows.push(['Topup', tRowNum, 'SKIP', 'Mã KH là NCC', tMaKH]); tSkipped++; continue; }
-
-      var tTinhTrang = (tr[tCol['Tình trạng']] || '').toString().trim();
-      if (tTinhTrang.toLowerCase() !== 'done') { rows.push(['Topup', tRowNum, 'SKIP', 'Tình trạng ≠ Done', tTinhTrang]); tSkipped++; continue; }
-
-      var tYeuCau = (tr[tCol['Yêu cầu']] || '').toString().trim().toUpperCase();
-      if (tYeuCau !== 'DEPOSIT' && tYeuCau !== 'WITHDRAW') { rows.push(['Topup', tRowNum, 'SKIP', 'Yêu cầu lạ', tYeuCau]); tSkipped++; continue; }
-
-      if (!MA_KH_REGEX.test(tMaKH)) { rows.push(['Topup', tRowNum, 'SKIP', 'Mã KH sai format', tMaKH]); tSkipped++; continue; }
-
-      rows.push(['Topup', tRowNum, 'OK', tYeuCau, tMaKH]);
-      tTaken++;
-    }
-    rows.push(['Topup', '', 'TỔNG', 'OK: ' + tTaken + ' | Skip: ' + tSkipped, 'Quét dòng ' + START_TOPUP + ' → ' + tData.length]);
-  }
-
-  // ── AUDIT ĐỐI CHIẾU ──
-  var START_DC = 2371;
-  var sheetDC = source.getSheetByName(TAB_DOI_CHIEU);
-  if (sheetDC) {
-    var dData = sheetDC.getDataRange().getValues();
-    var dHeaders = dData[0];
-    var dCol = {};
-    dHeaders.forEach(function(h, i) { dCol[h.toString().trim()] = i; });
-
-    var dTakenKH = 0, dTakenNCC = 0, dSkipped = 0;
-    for (var di = START_DC - 1; di < dData.length; di++) {
-      var dr = dData[di];
-      var dRowNum = di + 1;
-
-      var dHasData = false;
-      for (var dc = 0; dc < dr.length; dc++) {
-        if (dr[dc] !== '' && dr[dc] !== null && dr[dc] !== undefined) { dHasData = true; break; }
-      }
-      if (!dHasData) { rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Dòng trống', '']); dSkipped++; continue; }
-
-      var dNgayRaw = dr[dCol['Ngày']];
-      var dNgay = _parseDate(dNgayRaw);
-      if (!dNgay) { rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Ngày không hợp lệ', String(dNgayRaw)]); dSkipped++; continue; }
-      if (dNgay < DATE_FROM) { rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Ngày < 2026', dNgay.toISOString().substring(0,10)]); dSkipped++; continue; }
-
-      var dMaKH = (dr[dCol['Mã KH']] || '').toString().trim();
-      var dGdKhach = (dr[dCol['Giao dịch với khách']] || '').toString().trim();
-      var dGdNguon = (dr[dCol['Giao dịch với Nguồn']] || '').toString().trim();
-      var dHttt = (dr[dCol['Hình thức thanh toán']] || '').toString().trim();
-
-      var dKHStatus = '';
-      if (dGdKhach) {
-        if (!dMaKH) { dKHStatus = 'SKIP:MãKH trống'; }
-        else if (NCC_MA_KH.indexOf(dMaKH) >= 0) { dKHStatus = 'SKIP:MãKH là NCC'; }
-        else if (dGdKhach !== 'Khách Nạp tiền' && dGdKhach !== 'Khách mua TK') { dKHStatus = 'SKIP:GD khách="' + dGdKhach + '"'; }
-        else if (dGdKhach === 'Khách mua TK' && dHttt.toLowerCase().indexOf('ghim') >= 0) { dKHStatus = 'SKIP:httt ghim'; }
-        else if (!MA_KH_REGEX.test(dMaKH)) { dKHStatus = 'SKIP:MãKH sai format "' + dMaKH + '"'; }
-        else { dKHStatus = 'OK'; dTakenKH++; }
-      }
-
-      var dNCCStatus = '';
-      if (dGdNguon) {
-        if (dGdNguon !== 'Nạp tiền cho nguồn' && dGdNguon !== 'Mua Tài khoản') { dNCCStatus = 'SKIP:GD nguồn="' + dGdNguon + '"'; }
-        else if (dHttt.toLowerCase().indexOf('ghim') >= 0) { dNCCStatus = 'SKIP:httt ghim'; }
-        else { dNCCStatus = 'OK'; dTakenNCC++; }
-      }
-
-      if (!dGdKhach && !dGdNguon) {
-        rows.push(['ĐốiChiếu', dRowNum, 'SKIP', 'Không có GD khách/nguồn', '']);
-        dSkipped++;
-      } else {
-        var detail = 'KH:' + (dKHStatus || 'N/A') + ' | NCC:' + (dNCCStatus || 'N/A');
-        var status = (dKHStatus === 'OK' || dNCCStatus === 'OK') ? 'OK' : 'SKIP';
-        if (status === 'SKIP') dSkipped++;
-        rows.push(['ĐốiChiếu', dRowNum, status, dGdKhach || dGdNguon, detail + ' | MãKH:' + dMaKH]);
-      }
-    }
-    rows.push(['ĐốiChiếu', '', 'TỔNG', 'KH OK: ' + dTakenKH + ' | NCC OK: ' + dTakenNCC + ' | Skip: ' + dSkipped, 'Quét dòng ' + START_DC + ' → ' + dData.length]);
-  }
-
-  // ── AUDIT ĐỐI SOÁT ──
-  var crmIds = _loadCrmIds_();
-  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
-  var gdSheet = ssGD.getSheetByName('GD_KhachHang');
-  var gdData = gdSheet ? gdSheet.getDataRange().getValues() : [];
-  var ssDoi = _openCrm_(crmIds, 'DOI_SOAT_' + NAM);
-  var dsSheet = ssDoi.getSheetByName('DoiSoat_GD');
-  var dsData = dsSheet ? dsSheet.getDataRange().getValues() : [];
-
-  var dsSet = {};
-  for (var dd = 1; dd < dsData.length; dd++) {
-    var dsMaGd = (dsData[dd][0] || '').toString().trim();
-    if (dsMaGd) dsSet[dsMaGd] = true;
-  }
-
-  var dsTotal = 0, dsMissing = 0;
-  for (var gg = 1; gg < gdData.length; gg++) {
-    var gMaGd = (gdData[gg][0] || '').toString().trim();
-    var gLoai = (gdData[gg][2] || '').toString().trim();
-    var gHttt = (gdData[gg][3] || '').toString().trim();
-    if (_needsDoiSoat(gLoai, gHttt)) {
-      dsTotal++;
-      if (!dsSet[gMaGd]) {
-        dsMissing++;
-        rows.push(['DoiSoat', gg + 1, 'MISSING', gMaGd, gLoai + '/' + gHttt]);
-      }
-    }
-  }
-  rows.push(['DoiSoat', '', 'TỔNG', 'Cần: ' + dsTotal + ' | Có: ' + (dsTotal - dsMissing) + ' | Thiếu: ' + dsMissing, 'GD_KhachHang: ' + (gdData.length - 1) + ' dòng']);
-
-  // ── GHI TẤT CẢ VÀO SHEET ──
-  if (rows.length > 0) {
-    auditSheet.getRange(2, 1, rows.length, 5).setValues(rows);
-  }
-
-  Logger.log('=== AUDIT HOÀN TẤT — ' + rows.length + ' dòng ghi vào Audit_Log ===');
-}
+// (Audit functions removed — use git history if needed)
