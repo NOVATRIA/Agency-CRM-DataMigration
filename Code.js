@@ -41,6 +41,10 @@ var DATE_TO   = new Date(2026, 0, 31);   // 31/01/2026 — đổi khi mở rộn
 
 // Quỹ gốc cố định = 31/12/2025 (không đổi)
 var QUY_GOC_DATE = new Date(2025, 11, 31); // 31/12/2025
+
+// Filter KH: điền mã KH để test 1 KH, hoặc 'ALL' để lấy tất cả
+var FILTER_KH = 'ALL';
+// var FILTER_KH = 'LLK-012605';  // ← ví dụ: chỉ test KH này
 // ────────────────────────────────────────────────────────────
 
 // Mã KH đặc biệt = GD NCC → bỏ qua
@@ -1027,6 +1031,7 @@ function _readTopup() {
 
     var maKH = _fixMaKH((r[col['Mã khách hàng']] || '').toString().trim());
     if (!maKH) continue;
+    if (!_matchKH(maKH)) continue;
     if (NCC_MA_KH.indexOf(maKH) >= 0) continue;
 
     var cid = _formatCID(r[col['ID Tài Khoản']]);
@@ -1087,6 +1092,7 @@ function _readDoiChieu() {
 
     var maKH = _fixMaKH((r[col['Mã KH']] || '').toString().trim());
     if (!maKH) continue;
+    if (!_matchKH(maKH)) continue;
     if (NCC_MA_KH.indexOf(maKH) >= 0) continue;
 
     var gdKhach = (r[col['Giao dịch với khách']] || '').toString().trim();
@@ -2003,9 +2009,19 @@ function _sendTelegram(message) {
  */
 function _fixMaKH(maKH) {
   if (!maKH) return '';
-  maKH = maKH.replace(/\s+/g, ''); // xoá tất cả khoảng trắng
-  maKH = maKH.replace(/^LLD-/i, 'LLK-'); // đổi LLD → LLK
+  maKH = maKH.replace(/\s+/g, '');
+  maKH = maKH.replace(/^LLD-/i, 'LLK-');
   return maKH;
+}
+
+/**
+ * Kiểm tra mã KH có match FILTER_KH không
+ * FILTER_KH = 'ALL' → luôn true
+ * FILTER_KH = 'LLK-012605' → chỉ true cho KH đó
+ */
+function _matchKH(maKH) {
+  if (!FILTER_KH || FILTER_KH === 'ALL') return true;
+  return maKH === FILTER_KH;
 }
 
 function _parseCIDs(raw, rowNum, tab) {
