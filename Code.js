@@ -186,15 +186,14 @@ function buildAll() {
   // Bước 9: Ghi chi tiết lỗi (nếu có)
   _writeErrors();
 
-  // Bước 10: Gửi Telegram nếu có lỗi
-  if (_errors.length > 0) {
-    _sendTelegram('🚨 *DataMigration có lỗi*\n\n'
-      + 'Errors: ' + _errors.length + '\n'
-      + 'KH mới: ' + statsKH.added + ', Kho mới: ' + statsKho.added + '\n'
-      + 'GD KH mới: ' + statsGD.added + ', GD NCC mới: ' + statsGDNCC.added + '\n'
-      + 'Thời gian: ' + elapsed + 's\n\n'
-      + 'Xem chi tiết trong MigrationLogs/Error\\_Log');
-  }
+  // Bước 10: Luôn gửi Telegram báo cáo tổng kết
+  var icon = _errors.length > 0 ? '🚨' : '✅';
+  _sendTelegram(icon + ' *DataMigration hoàn tất*\n\n'
+    + 'KH: ' + statsKH.added + ' | Kho: ' + statsKho.added + '\n'
+    + 'GD KH: ' + statsGD.added + ' | GD NCC: ' + statsGDNCC.added + '\n'
+    + 'Errors: ' + _errors.length + '\n'
+    + 'Thời gian: ' + elapsed + 's'
+    + (_errors.length > 0 ? '\n\nXem chi tiết trong MigrationLogs/Error\\_Log' : ''));
 
   Logger.log('=== BUILD ALL DONE — ' + elapsed + 's, Errors: ' + _errors.length + ' ===');
 }
