@@ -29,12 +29,18 @@ var TAB_DOI_CHIEU = 'Đối chiếu T.chính';
 var TAB_TK_KHO = 'TK trong kho';
 
 // ── CẤU HÌNH NGÀY ──────────────────────────────────────────
-// Chỉ lấy GD từ ngày này trở đi (đổi ở đây khi muốn mở rộng phạm vi)
-var DATE_FROM = new Date(2026, 3, 1); // 01/04/2026 (tháng 0-indexed: 3 = tháng 4)
+// Migrate theo tháng: đổi DATE_FROM + DATE_TO khi mở rộng phạm vi
+//
+// Tháng 1: DATE_FROM = 01/01/2026, DATE_TO = 31/01/2026
+// Tháng 2: DATE_FROM = 01/01/2026, DATE_TO = 28/02/2026
+// Tháng 3: DATE_FROM = 01/01/2026, DATE_TO = 31/03/2026
+// Tháng 4: DATE_FROM = 01/01/2026, DATE_TO = 07/04/2026 (hoặc ngày cuối)
+//
+var DATE_FROM = new Date(2026, 0, 1);    // 01/01/2026 — cố định
+var DATE_TO   = new Date(2026, 0, 31);   // 31/01/2026 — đổi khi mở rộng
 
-// Cột quỹ gốc trong tab "Tổng hợp" — ngày cuối trước DATE_FROM
-// 31/03/2026 → tìm tự động trong code, không cần hardcode index
-var QUY_GOC_DATE = new Date(2026, 2, 31); // 31/03/2026
+// Quỹ gốc cố định = 31/12/2025 (không đổi)
+var QUY_GOC_DATE = new Date(2025, 11, 31); // 31/12/2025
 // ────────────────────────────────────────────────────────────
 
 // Mã KH đặc biệt = GD NCC → bỏ qua
@@ -466,7 +472,7 @@ function _syncKho(crmIds, allRows, nccMap, khoData) {
   khoData.forEach(function(tk) {
     if (existing[tk.cid]) return; // đã có trong CRM
     // Chỉ lấy CID nhập từ 01/01/2026
-    if (tk.ngay_nhap && tk.ngay_nhap instanceof Date && tk.ngay_nhap < DATE_FROM) return;
+    if (tk.ngay_nhap && tk.ngay_nhap instanceof Date && (tk.ngay_nhap < DATE_FROM || tk.ngay_nhap > DATE_TO)) return;
 
     var maNcc = _lookupNcc(nccMap, tk.ten_group);
     if (!maNcc && tk.ten_group) {
@@ -1017,7 +1023,7 @@ function _readTopup() {
     var r = data[i];
 
     var ngay = _parseDate(r[col['Thời gian']]);
-    if (!ngay || ngay < DATE_FROM) continue;
+    if (!ngay || ngay < DATE_FROM || ngay > DATE_TO) continue;
 
     var maKH = _fixMaKH((r[col['Mã khách hàng']] || '').toString().trim());
     if (!maKH) continue;
@@ -1077,7 +1083,7 @@ function _readDoiChieu() {
     var r = data[i];
 
     var ngay = _parseDate(r[col['Ngày']]);
-    if (!ngay || ngay < DATE_FROM) continue;
+    if (!ngay || ngay < DATE_FROM || ngay > DATE_TO) continue;
 
     var maKH = _fixMaKH((r[col['Mã KH']] || '').toString().trim());
     if (!maKH) continue;
@@ -1193,7 +1199,7 @@ function _readDoiChieuNCC() {
     var r = data[i];
 
     var ngay = _parseDate(r[col['Ngày']]);
-    if (!ngay || ngay < DATE_FROM) continue;
+    if (!ngay || ngay < DATE_FROM || ngay > DATE_TO) continue;
 
     var gdNguon = (r[col['Giao dịch với Nguồn']] || '').toString().trim();
     if (!gdNguon) continue;
@@ -1529,26 +1535,16 @@ function _doiChieuQuy(crmIds) {
   var data = sheet.getDataRange().getValues();
   if (data.length <= 5) return;
 
-  // Tìm cột ngày mới nhất trong dòng 2 (dòng header ngày, index 1)
+  // Tìm cột DATE_TO trong dòng header ngày
   var headerRow = data[1];
   var colMaKH = 3; // D
-  var lastDateCol = -1;
-  var lastDateVal = '';
-  for (var c = 6; c < headerRow.length; c++) { // bắt đầu từ cột G (index 6)
-    var val = headerRow[c];
-    if (val instanceof Date && !isNaN(val.getTime())) {
-      lastDateCol = c;
-      lastDateVal = Utilities.formatDate(val, TZ, 'dd/MM/yyyy');
-    } else if (val && val.toString().match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-      lastDateCol = c;
-      lastDateVal = val.toString();
-    }
-  }
+  var lastDateCol = _findDateCol(headerRow, DATE_TO);
+  var lastDateVal = Utilities.formatDate(DATE_TO, TZ, 'dd/MM/yyyy');
   if (lastDateCol < 0) {
-    Logger.log('WARNING: Không tìm thấy cột ngày trong tab Tổng hợp');
+    Logger.log('WARNING: Không tìm thấy cột ngày ' + lastDateVal + ' trong tab Tổng hợp');
     return;
   }
-  Logger.log('Đối chiếu KH: ngày cột cuối = ' + lastDateVal + ' (col index ' + lastDateCol + ')');
+  Logger.log('Đối chiếu KH: cột DATE_TO = ' + lastDateVal + ' (col index ' + lastDateCol + ')');
 
   // Đọc quỹ kế toán theo KH (bỏ qua KH không hoạt động + quỹ = 0)
   var colTTNapRut = 4;   // E
@@ -1567,56 +1563,17 @@ function _doiChieuQuy(crmIds) {
   }
   Logger.log('Đối chiếu KH: ' + Object.keys(ketoanMap).length + ' KH kế toán để so sánh');
 
-  // Tính quỹ CRM cho từng KH — chỉ tính GD đến ngày đối chiếu
-  // (tránh chênh lệch giả khi CRM có GD mới hơn "Tổng hợp")
-  var lastDate = null;
-  var hdrVal = data[1][lastDateCol];
-  if (hdrVal instanceof Date) lastDate = hdrVal;
-  else if (hdrVal) { var pd = _parseDate(hdrVal); if (pd) lastDate = pd; }
-  // Set cuối ngày (23:59:59) để so sánh chính xác
-  if (lastDate) {
-    lastDate = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate(), 23, 59, 59);
-  }
-
-  // Đọc quy_goc từ DanhMuc_KH
+  // So sánh quỹ CRM (đã recompute) với quỹ KT tại DATE_TO
+  // GD đã filter bởi DATE_FROM→DATE_TO khi đọc nguồn → quy_hien_tai = quỹ đúng phạm vi
   var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
   var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
   var khData = sheetKH.getDataRange().getValues();
-  var quyGocCRM = {}; // { ma_kh: quy_goc }
-  for (var k = 1; k < khData.length; k++) {
-    var mkk = (khData[k][0] || '').toString().trim();
-    if (mkk) quyGocCRM[mkk] = parseFloat(khData[k][4]) || 0; // cột E = quy_goc
-  }
-
-  // Đọc GD KH và tính quỹ chỉ đến ngày đối chiếu
-  var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
-  var sheetGD = ssGD.getSheetByName('GD_KhachHang');
-  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
-
-  var quyCRMMap = {}; // { ma_kh: tổng biến động đến ngày }
-  for (var g = 1; g < gdData.length; g++) {
-    var gdMaKH = (gdData[g][1] || '').toString().trim();
-    if (!gdMaKH || ketoanMap[gdMaKH] === undefined) continue;
-    var gdNgay = gdData[g][14]; // ngay_tao
-    // Chỉ tính GD có ngày <= ngày đối chiếu
-    if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime()) continue; // +1 ngày buffer (cuối ngày)
-    var gdLoai = (gdData[g][2] || '').toString().trim();
-    var gdHttt = (gdData[g][3] || '').toString().trim();
-    var gdSoTien = parseFloat(gdData[g][5]) || 0;
-    var bd = _calculateBienDongKH(gdLoai, gdHttt, gdSoTien);
-    if (!quyCRMMap[gdMaKH]) quyCRMMap[gdMaKH] = 0;
-    quyCRMMap[gdMaKH] += bd;
-  }
 
   var warnings = [];
-  // Chỉ so sánh KH có trong CRM (có trong DanhMuc_KH)
-  var khKeys = Object.keys(quyGocCRM);
-  for (var j = 0; j < khKeys.length; j++) {
-    var mk = khKeys[j];
-    if (ketoanMap[mk] === undefined) continue; // KH không có trong "Tổng hợp" → bỏ qua
-    var quyGoc = quyGocCRM[mk] || 0;
-    var tongBienDong = quyCRMMap[mk] || 0;
-    var quyCRM = quyGoc + tongBienDong;
+  for (var j = 1; j < khData.length; j++) {
+    var mk = (khData[j][0] || '').toString().trim();
+    if (!mk || ketoanMap[mk] === undefined) continue;
+    var quyCRM = parseFloat(khData[j][3]) || 0; // cột D = quy_hien_tai
     var quyKT = ketoanMap[mk];
     var diff = Math.abs(quyCRM - quyKT);
     if (diff > 0.01) {
@@ -1689,28 +1646,12 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
   var headerRow = data[0]; // dòng 1
   var colTenNguon = 1; // B
 
-  // Tìm cột ngày mới nhất
-  var lastDateCol = -1;
-  var lastDateVal = '';
-  var lastDate = null;
-  for (var c = 3; c < headerRow.length; c++) { // bắt đầu từ cột D (index 3)
-    var val = headerRow[c];
-    if (val instanceof Date && !isNaN(val.getTime())) {
-      lastDateCol = c;
-      lastDateVal = Utilities.formatDate(val, TZ, 'dd/MM/yyyy');
-      lastDate = val;
-    } else if (val && val.toString().match(/^\d{2}\/\d{2}\/\d{4}$/)) {
-      lastDateCol = c;
-      lastDateVal = val.toString();
-      lastDate = _parseDate(val);
-    }
-  }
+  // Tìm cột DATE_TO trong tab Nguồn
+  var lastDateCol = _findDateCol(headerRow, DATE_TO);
+  var lastDateVal = Utilities.formatDate(DATE_TO, TZ, 'dd/MM/yyyy');
   if (lastDateCol < 0) {
-    Logger.log('WARNING: Không tìm thấy cột ngày trong tab Nguồn');
+    Logger.log('WARNING: Không tìm thấy cột ngày ' + lastDateVal + ' trong tab Nguồn');
     return;
-  }
-  if (lastDate) {
-    lastDate = new Date(lastDate.getFullYear(), lastDate.getMonth(), lastDate.getDate(), 23, 59, 59);
   }
 
   // Đọc quỹ kế toán NCC + quỹ gốc NCC
@@ -1746,7 +1687,6 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
     var gdMaNCC = (gdData[g][2] || '').toString().trim();
     if (!gdMaNCC || ketoanNCCMap[gdMaNCC] === undefined) continue;
     var gdNgay = gdData[g][1]; // ngay_gd
-    if (lastDate && gdNgay instanceof Date && gdNgay.getTime() > lastDate.getTime()) continue;
     if (!gdByNCC[gdMaNCC]) gdByNCC[gdMaNCC] = [];
     gdByNCC[gdMaNCC].push({
       ngay: gdNgay,
