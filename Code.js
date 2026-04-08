@@ -1820,42 +1820,76 @@ function _doiChieuQuy(crmIds) {
     warnSheet.getRange(lr + 1, 1, logRows.length, 6).setValues(logRows);
   }
 
-  // Telegram — group theo KH, chỉ hiện ngày đầu tiên lệch (gộp ngày lặp cùng số)
-  var khWarnings = {};
+  // ── Telegram: Verify 31/03 + chỉ ngày đầu tiên lệch từ 01/04 ──
+
+  // Tách kết quả 31/03 vs sau 01/04
+  var kickoffDateStr = Utilities.formatDate(KICKOFF_DATE, TZ, 'dd/MM/yyyy');
+  var verify31 = {}; // { ma_kh: { quy_crm, quy_kt, lech } } — kết quả 31/03
+  var after01 = {}; // { ma_kh: { ngay, quy_crm, quy_kt, lech } } — ngày đầu tiên lệch từ 01/04
+
+  // Tính 31/03 cho TẤT CẢ KH (dù khớp hay lệch)
+  var kickoffCol = _findDateCol(data[1], KICKOFF_DATE);
+  if (kickoffCol >= 0) {
+    var kickoffEnd = new Date(KICKOFF_DATE.getFullYear(), KICKOFF_DATE.getMonth(), KICKOFF_DATE.getDate(), 23, 59, 59);
+    for (var mk31 in khRows) {
+      var quyKT31 = parseFloat(data[khRows[mk31]][kickoffCol]) || 0;
+      // Tính CRM đến 31/03
+      var crm31 = quyGocMap[mk31] || 0;
+      for (var g31 = 1; g31 < gdData.length; g31++) {
+        var gMK31 = (gdData[g31][1] || '').toString().trim();
+        if (gMK31 !== mk31) continue;
+        var gNgay31 = gdData[g31][14];
+        if (!(gNgay31 instanceof Date) || gNgay31.getTime() > kickoffEnd.getTime()) continue;
+        crm31 += _calculateBienDongKH((gdData[g31][2]||'').toString().trim(), (gdData[g31][3]||'').toString().trim(), parseFloat(gdData[g31][5])||0);
+      }
+      verify31[mk31] = { quy_crm: crm31, quy_kt: quyKT31, lech: crm31 - quyKT31 };
+    }
+  }
+
+  // Tìm ngày đầu tiên lệch từ 01/04 cho mỗi KH
   allWarnings.forEach(function(w) {
-    if (!khWarnings[w.ma_kh]) khWarnings[w.ma_kh] = [];
-    khWarnings[w.ma_kh].push(w);
+    // Bỏ qua 31/03 (đã xử lý riêng)
+    if (w.ngay === kickoffDateStr) return;
+    if (!after01[w.ma_kh]) {
+      after01[w.ma_kh] = w; // chỉ lấy ngày đầu tiên
+    }
   });
 
-  var khCount = Object.keys(khWarnings).length;
-  if (khCount > 0) {
-    var msg = '⚠️ *Chênh lệch quỹ KH* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n';
-    Object.keys(khWarnings).sort().forEach(function(mk) {
-      var days = khWarnings[mk];
-      msg += '• `' + mk + '`:\n';
-      // Gộp ngày liên tiếp cùng số lệch
-      var i = 0;
-      while (i < days.length) {
-        var start = days[i];
-        var j = i + 1;
-        while (j < days.length && Math.abs(days[j].lech - start.lech) < 0.01) j++;
-        // i→j-1 cùng số lệch
-        if (j - i > 1) {
-          msg += '  ' + start.ngay + '→' + days[j-1].ngay + ': lệch $' + start.lech.toFixed(2) + '\n';
-        } else {
-          msg += '  ' + start.ngay + ': CRM $' + start.quy_crm.toFixed(2) + ' vs KT $' + start.quy_kt.toFixed(2) + ' (lệch $' + start.lech.toFixed(2) + ')\n';
-        }
-        i = j;
-      }
+  // Build message
+  var allKHKeys = Object.keys(khRows).sort();
+  var khLech31 = 0, khLechAfter = 0;
+  var msg = '📊 *Đối chiếu quỹ KH* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n';
+
+  // Phần 1: Verify 31/03
+  msg += '*Verify Kick-Off 31/03:*\n';
+  var all31OK = true;
+  allKHKeys.forEach(function(mk) {
+    var v = verify31[mk];
+    if (!v) return;
+    if (Math.abs(v.lech) > 0.01) {
+      msg += '❌ `' + mk + '`: CRM $' + v.quy_crm.toFixed(2) + ' vs KT $' + v.quy_kt.toFixed(2) + ' (lệch $' + v.lech.toFixed(2) + ')\n';
+      all31OK = false;
+      khLech31++;
+    }
+  });
+  if (all31OK) msg += '✅ Tất cả ' + allKHKeys.length + ' KH khớp tại 31/03\n';
+
+  // Phần 2: Từ 01/04 — ngày đầu tiên lệch
+  var afterKeys = Object.keys(after01).sort();
+  khLechAfter = afterKeys.length;
+  if (afterKeys.length > 0) {
+    msg += '\n*Chênh lệch từ 01/04:*\n';
+    afterKeys.forEach(function(mk) {
+      var w = after01[mk];
+      msg += '• `' + mk + '` ' + w.ngay + ': CRM $' + w.quy_crm.toFixed(2) + ' vs KT $' + w.quy_kt.toFixed(2) + ' (lệch $' + w.lech.toFixed(2) + ')\n';
     });
-    msg += '\nTổng: ' + khCount + ' KH chênh lệch';
-    _sendTelegram(msg);
-    Logger.log('Đối chiếu KH: ' + khCount + ' KH chênh lệch, ' + allWarnings.length + ' dòng warning');
   } else {
-    _sendTelegram('✅ *Đối chiếu quỹ KH* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n'
-      + Object.keys(khRows).length + ' KH × ' + dateCols.length + ' ngày — tất cả khớp.');
-    Logger.log('Đối chiếu KH: OK — tất cả khớp');
+    msg += '\n✅ Từ 01/04 → ' + dateCols[dateCols.length-1].dateStr + ': tất cả KH khớp\n';
   }
+
+  msg += '\nTổng: ' + khLech31 + ' KH lệch 31/03, ' + khLechAfter + ' KH lệch từ 01/04';
+  _sendTelegram(msg);
+  Logger.log('Đối chiếu KH: ' + khLech31 + ' lệch 31/03, ' + khLechAfter + ' lệch từ 01/04');
 }
 
 // ============================================================
@@ -1965,40 +1999,62 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
     warnSheet.getRange(lr + 1, 1, logRows.length, 6).setValues(logRows);
   }
 
-  // Telegram
-  var nccWarnings = {};
+  // ── Telegram NCC: Verify 31/03 + ngày đầu lệch từ 01/04 ──
+  var kickoffDateStr = Utilities.formatDate(KICKOFF_DATE, TZ, 'dd/MM/yyyy');
+  var nccAfter01 = {};
   allWarnings.forEach(function(w) {
-    if (!nccWarnings[w.ma_ncc]) nccWarnings[w.ma_ncc] = [];
-    nccWarnings[w.ma_ncc].push(w);
+    if (w.ngay === kickoffDateStr) return;
+    if (!nccAfter01[w.ma_ncc]) nccAfter01[w.ma_ncc] = w;
   });
 
-  var nccCount = Object.keys(nccWarnings).length;
-  if (nccCount > 0) {
-    var msg = '⚠️ *Chênh lệch quỹ NCC* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n';
-    Object.keys(nccWarnings).sort().forEach(function(mn) {
-      var days = nccWarnings[mn];
-      msg += '• `' + mn + '`:\n';
-      var i = 0;
-      while (i < days.length) {
-        var start = days[i];
-        var j = i + 1;
-        while (j < days.length && Math.abs(days[j].lech - start.lech) < 0.01) j++;
-        if (j - i > 1) {
-          msg += '  ' + start.ngay + '→' + days[j-1].ngay + ': lệch $' + start.lech.toFixed(2) + '\n';
-        } else {
-          msg += '  ' + start.ngay + ': CRM $' + start.quy_crm.toFixed(2) + ' vs KT $' + start.quy_kt.toFixed(2) + ' (lệch $' + start.lech.toFixed(2) + ')\n';
-        }
-        i = j;
+  // Verify 31/03 NCC
+  var nccLech31 = 0;
+  var kickoffColNCC = _findDateCol(headerRow, KICKOFF_DATE);
+  var msg = '📊 *Đối chiếu quỹ NCC* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n';
+  msg += '*Verify Kick-Off 31/03:*\n';
+  var all31OK_NCC = true;
+  if (kickoffColNCC >= 0) {
+    var kickoffEndNCC = new Date(KICKOFF_DATE.getFullYear(), KICKOFF_DATE.getMonth(), KICKOFF_DATE.getDate(), 23, 59, 59);
+    Object.keys(nccRows).sort().forEach(function(mn) {
+      var quyKT31 = parseFloat(data[nccRows[mn]][kickoffColNCC]) || 0;
+      var quy31 = nccQuyGocMap[mn] || 0;
+      var gds31 = [];
+      for (var g = 1; g < gdData.length; g++) {
+        if ((gdData[g][2]||'').toString().trim() !== mn) continue;
+        var gN = gdData[g][1];
+        if (!(gN instanceof Date) || gN.getTime() > kickoffEndNCC.getTime()) continue;
+        gds31.push({ loai_gd: (gdData[g][3]||'').toString().trim(), so_tien: parseFloat(gdData[g][5])||0 });
+      }
+      gds31.forEach(function(gd) {
+        if (gd.loai_gd === 'Nap_quy') quy31 += gd.so_tien;
+        else if (gd.loai_gd === 'Rut_CID') quy31 += gd.so_tien;
+        else if (gd.loai_gd === 'Mua_TK') quy31 -= gd.so_tien;
+        else if (gd.loai_gd === 'Nap_CID') quy31 -= gd.so_tien;
+        else if (gd.loai_gd === 'Refund') quy31 = 0;
+      });
+      if (Math.abs(quy31 - quyKT31) > 0.01) {
+        msg += '❌ `' + mn + '`: CRM $' + quy31.toFixed(2) + ' vs KT $' + quyKT31.toFixed(2) + ' (lệch $' + (quy31-quyKT31).toFixed(2) + ')\n';
+        all31OK_NCC = false;
+        nccLech31++;
       }
     });
-    msg += '\nTổng: ' + nccCount + ' NCC chênh lệch';
-    _sendTelegram(msg);
-    Logger.log('Đối chiếu NCC: ' + nccCount + ' NCC chênh lệch');
-  } else {
-    _sendTelegram('✅ *Đối chiếu quỹ NCC* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n'
-      + Object.keys(nccRows).length + ' NCC × ' + dateCols.length + ' ngày — tất cả khớp.');
-    Logger.log('Đối chiếu NCC: OK');
   }
+  if (all31OK_NCC) msg += '✅ Tất cả ' + Object.keys(nccRows).length + ' NCC khớp tại 31/03\n';
+
+  var nccAfterKeys = Object.keys(nccAfter01).sort();
+  if (nccAfterKeys.length > 0) {
+    msg += '\n*Chênh lệch từ 01/04:*\n';
+    nccAfterKeys.forEach(function(mn) {
+      var w = nccAfter01[mn];
+      msg += '• `' + mn + '` ' + w.ngay + ': CRM $' + w.quy_crm.toFixed(2) + ' vs KT $' + w.quy_kt.toFixed(2) + ' (lệch $' + w.lech.toFixed(2) + ')\n';
+    });
+  } else {
+    msg += '\n✅ Từ 01/04 → ' + dateCols[dateCols.length-1].dateStr + ': tất cả NCC khớp\n';
+  }
+
+  msg += '\nTổng: ' + nccLech31 + ' NCC lệch 31/03, ' + nccAfterKeys.length + ' NCC lệch từ 01/04';
+  _sendTelegram(msg);
+  Logger.log('Đối chiếu NCC: ' + nccLech31 + ' lệch 31/03, ' + nccAfterKeys.length + ' lệch từ 01/04');
 }
 
 // ============================================================
