@@ -944,22 +944,45 @@ function _createKickOffKH(crmIds) {
     ktMap[mk] = parseFloat(thData[i][colKickOff]) || 0;
   }
 
-  // Đọc quỹ CRM hiện tại
+  // Đọc quỹ gốc + GD KH từ CRM
   var ssKH = _openCrm_(crmIds, 'KHACH_HANG');
   var sheetKH = ssKH.getSheetByName('DanhMuc_KH');
   var khData = sheetKH.getDataRange().getValues();
 
-  // Tìm KH chênh lệch → tạo GD Kick-Off
+  var quyGocMap = {};
+  for (var kg = 1; kg < khData.length; kg++) {
+    var mkg = (khData[kg][0] || '').toString().trim();
+    if (mkg) quyGocMap[mkg] = parseFloat(khData[kg][4]) || 0; // cột E = quy_goc
+  }
+
   var ssGD = _openCrm_(crmIds, 'GD_KH_' + NAM);
   var sheetGD = ssGD.getSheetByName('GD_KhachHang');
+  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
   _initCountersFromExisting_(sheetGD, 'GD-KH');
 
+  // Tính quỹ CRM CHỈ ĐẾN KICKOFF_DATE (không tính GD sau 31/03)
+  var kickoffEnd = new Date(KICKOFF_DATE.getFullYear(), KICKOFF_DATE.getMonth(), KICKOFF_DATE.getDate(), 23, 59, 59);
+  var crmAtKickoff = {}; // { ma_kh: quỹ CRM đến 31/03 }
+  for (var mk2 in quyGocMap) crmAtKickoff[mk2] = quyGocMap[mk2];
+  for (var g = 1; g < gdData.length; g++) {
+    var gMK = (gdData[g][1] || '').toString().trim();
+    if (!gMK || crmAtKickoff[gMK] === undefined) continue;
+    var gNgay = gdData[g][14]; // ngay_tao
+    if (!(gNgay instanceof Date) || gNgay.getTime() > kickoffEnd.getTime()) continue;
+    crmAtKickoff[gMK] += _calculateBienDongKH(
+      (gdData[g][2]||'').toString().trim(),
+      (gdData[g][3]||'').toString().trim(),
+      parseFloat(gdData[g][5]) || 0
+    );
+  }
+
+  // Tìm KH chênh lệch → tạo GD Kick-Off
   var newRows = [];
   var dsRows = [];
   for (var j = 1; j < khData.length; j++) {
     var maKH = (khData[j][0] || '').toString().trim();
     if (!maKH || ktMap[maKH] === undefined) continue;
-    var quyCRM = parseFloat(khData[j][3]) || 0; // quy_hien_tai
+    var quyCRM = crmAtKickoff[maKH] || 0; // quỹ CRM đến 31/03
     var quyKT = ktMap[maKH];
     var diff = quyKT - quyCRM;
     if (Math.abs(diff) < 0.01) continue; // khớp rồi
@@ -1017,21 +1040,56 @@ function _createKickOffNCC(crmIds, nccMap) {
     ktNCCMap[maNcc] = parseFloat(nguonData[i][colKickOff]) || 0;
   }
 
-  // Đọc quỹ NCC hiện tại
+  // Đọc quỹ gốc NCC + GD NCC từ CRM
   var ssNCC = _openCrm_(crmIds, 'NHA_CUNG_CAP');
   var sheetNCC = ssNCC.getSheetByName('DanhMuc_NCC');
   var nccData = sheetNCC.getDataRange().getValues();
 
   var ssGD = _openCrm_(crmIds, 'GD_NCC_' + NAM);
   var sheetGD = ssGD.getSheetByName('GD_NhaCungCap');
+  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
   _initCountersFromExisting_(sheetGD, 'GD-NCC');
+
+  // Đọc quỹ gốc NCC
+  var nccQuyGocImport = _importQuyGocNCC(crmIds, nccMap) || {};
+
+  // Tính quỹ CRM NCC CHỈ ĐẾN KICKOFF_DATE
+  var kickoffEnd = new Date(KICKOFF_DATE.getFullYear(), KICKOFF_DATE.getMonth(), KICKOFF_DATE.getDate(), 23, 59, 59);
+  var crmNCCAtKickoff = {};
+  for (var mn in nccQuyGocImport) crmNCCAtKickoff[mn] = nccQuyGocImport[mn];
+  // Cũng init NCC có GD nhưng không có quỹ gốc
+  for (var g = 1; g < gdData.length; g++) {
+    var gMN = (gdData[g][2] || '').toString().trim();
+    if (gMN && crmNCCAtKickoff[gMN] === undefined) crmNCCAtKickoff[gMN] = 0;
+  }
+
+  // Tính tuần tự (Refund cần quỹ hiện tại)
+  for (var mn2 in crmNCCAtKickoff) {
+    var gds = [];
+    for (var g2 = 1; g2 < gdData.length; g2++) {
+      if ((gdData[g2][2]||'').toString().trim() !== mn2) continue;
+      var gN = gdData[g2][1];
+      if (!(gN instanceof Date) || gN.getTime() > kickoffEnd.getTime()) continue;
+      gds.push({ ngay: gN, loai_gd: (gdData[g2][3]||'').toString().trim(), so_tien: parseFloat(gdData[g2][5])||0 });
+    }
+    gds.sort(function(a,b) { return (a.ngay?a.ngay.getTime():0) - (b.ngay?b.ngay.getTime():0); });
+    var quy = crmNCCAtKickoff[mn2];
+    gds.forEach(function(gd) {
+      if (gd.loai_gd === 'Nap_quy') quy += gd.so_tien;
+      else if (gd.loai_gd === 'Rut_CID') quy += gd.so_tien;
+      else if (gd.loai_gd === 'Mua_TK') quy -= gd.so_tien;
+      else if (gd.loai_gd === 'Nap_CID') quy -= gd.so_tien;
+      else if (gd.loai_gd === 'Refund') quy = 0;
+    });
+    crmNCCAtKickoff[mn2] = quy;
+  }
 
   var newRows = [];
   var dsRows = [];
   for (var j = 1; j < nccData.length; j++) {
     var maNcc = (nccData[j][0] || '').toString().trim();
     if (!maNcc || ktNCCMap[maNcc] === undefined) continue;
-    var quyCRM = parseFloat(nccData[j][11]) || 0; // cột L = quy_hien_tai
+    var quyCRM = crmNCCAtKickoff[maNcc] || 0; // quỹ CRM đến 31/03
     var quyKT = ktNCCMap[maNcc];
     var diff = quyKT - quyCRM;
     if (Math.abs(diff) < 0.01) continue;
