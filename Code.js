@@ -763,9 +763,9 @@ function _syncGDNCC(crmIds, nccGDRows, nccMap) {
       r.nguoi_th,       // nguoi_thuc_hien
       r.ghi_chu,        // ghi_chu
       r.ngay,           // ngay_tao
-      doiSoat ? 'Da_doi_soat' : '',  // trang_thai_doi_soat
-      doiSoat ? 'Migration' : '',    // nguoi_doi_soat
-      doiSoat ? r.ngay : ''          // ngay_doi_soat
+      '',               // trang_thai_doi_soat (ghi vào DoiSoat_GD thay vì đây)
+      '',               // nguoi_doi_soat
+      ''                // ngay_doi_soat
     ]);
   });
 
@@ -1038,9 +1038,9 @@ function _createKickOffNCC(crmIds, nccMap) {
     newRows.push([
       maGd, KICKOFF_DATE, maNcc, loai, '', soTien, 0, soTien,
       '', '', '', '', '', '', 'Hoan_thanh', 'Migration', 'Kick-Off CRM',
-      KICKOFF_DATE, 'Da_doi_soat', 'Migration', KICKOFF_DATE
+      KICKOFF_DATE, '', '', ''
     ]);
-    // NCC cũng ghi vào DoiSoat_GD
+    // Ghi đối soát vào DoiSoat_GD (không ghi trực tiếp vào GD_NhaCungCap)
     dsRows.push([maGd, 'Da_doi_soat']);
   }
 
