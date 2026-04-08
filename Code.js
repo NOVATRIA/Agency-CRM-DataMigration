@@ -120,7 +120,7 @@ function doGet(e) {
 // MAIN
 // ============================================================
 
-function buildAll() {
+function buildAll(skipDoiChieu) {
   var start = new Date();
   _errors = [];
 
@@ -165,9 +165,11 @@ function buildAll() {
     _recomputeQuyNCC(crmIds, statsGDNCC.newMaNCCs, nccQuyGocMap);
   }
 
-  // Bước 7: Đối chiếu quỹ CRM vs Kế Toán (ghi Warning_Log + Telegram nếu lệch)
-  _doiChieuQuy(crmIds);
-  _doiChieuQuyNCC(crmIds, nccMap);
+  // Bước 7: Đối chiếu (bỏ qua khi gọi từ resetAndRebuild — sẽ chạy sau Kick-Off)
+  if (!skipDoiChieu) {
+    _doiChieuQuy(crmIds);
+    _doiChieuQuyNCC(crmIds, nccMap);
+  }
 
   // Bước 8: Ghi log vào 1-Database/Logs/MigrationLogs
   var elapsed = ((new Date() - start) / 1000).toFixed(1);
@@ -258,8 +260,8 @@ function resetAndRebuild() {
 
   Logger.log('=== RESET XONG — Bắt đầu buildAll() ===');
 
-  // 9. Chạy buildAll() để sync lại từ nguồn
-  buildAll();
+  // 9. Chạy buildAll() để sync lại từ nguồn (skip đối chiếu — chạy sau Kick-Off)
+  buildAll(true);
 
   // 10. Tạo GD Kick-Off CRM (cân bằng quỹ tại KICKOFF_DATE)
   var crmIds2 = _loadCrmIds_();
@@ -290,6 +292,10 @@ function resetAndRebuild() {
 
     Logger.log('Recompute sau Kick-Off: ' + allKHs.length + ' KH, ' + allNCCs.length + ' NCC');
   }
+
+  // 12. Đối chiếu SAU Kick-Off (quỹ đã cân bằng tại 31/03 → chỉ lệch từ 01/04 mới là lỗi thật)
+  _doiChieuQuy(crmIds2);
+  _doiChieuQuyNCC(crmIds2, nccMap2);
 }
 
 /**
@@ -1834,10 +1840,7 @@ function _doiChieuQuy(crmIds) {
     });
     msg += '\nTổng: ' + khCount + ' KH chênh lệch';
 
-    // Telegram giới hạn 4096 ký tự — cắt nếu quá dài
-    if (msg.length > 4000) {
-      msg = msg.substring(0, 3950) + '\n...(cắt bớt, xem Warning_Log)';
-    }
+    // _sendTelegram tự chia tin nếu quá dài
     _sendTelegram(msg);
     Logger.log('Đối chiếu KH: ' + khCount + ' KH chênh lệch, ' + allWarnings.length + ' dòng warning');
   } else {
@@ -1971,7 +1974,7 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
       });
     });
     msg += '\nTổng: ' + nccCount + ' NCC chênh lệch';
-    if (msg.length > 4000) msg = msg.substring(0, 3950) + '\n...(cắt bớt, xem Warning_Log)';
+    // _sendTelegram tự chia tin nếu quá dài
     _sendTelegram(msg);
     Logger.log('Đối chiếu NCC: ' + nccCount + ' NCC chênh lệch');
   } else {
@@ -2188,15 +2191,34 @@ function _sendTelegram(message) {
     Logger.log('WARNING: Thiếu BOT_TOKEN hoặc CHAT_ID trong CauHinh — bỏ qua gửi Telegram');
     return;
   }
+
+  // Chia tin nhắn theo dòng nếu > 4000 ký tự (Telegram giới hạn 4096)
+  if (message.length <= 4000) {
+    _sendTelegramRaw(token, chatId, message);
+  } else {
+    var lines = message.split('\n');
+    var chunk = '';
+    var part = 1;
+    for (var i = 0; i < lines.length; i++) {
+      if ((chunk + lines[i] + '\n').length > 3900 && chunk.length > 0) {
+        _sendTelegramRaw(token, chatId, chunk.trim() + '\n\n_(phần ' + part + ')_');
+        part++;
+        chunk = '';
+      }
+      chunk += lines[i] + '\n';
+    }
+    if (chunk.trim()) {
+      _sendTelegramRaw(token, chatId, chunk.trim() + (part > 1 ? '\n\n_(phần ' + part + ')_' : ''));
+    }
+  }
+}
+
+function _sendTelegramRaw(token, chatId, text) {
   try {
     UrlFetchApp.fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
       method: 'post',
       contentType: 'application/json',
-      payload: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'Markdown'
-      }),
+      payload: JSON.stringify({ chat_id: chatId, text: text, parse_mode: 'Markdown' }),
       muteHttpExceptions: true
     });
   } catch (e) {
