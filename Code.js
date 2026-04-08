@@ -32,7 +32,7 @@ var TAB_TK_KHO = 'TK trong kho';
 var DATE_FROM      = new Date(2026, 0, 1);    // 01/01/2026 — lấy GD từ ngày này
 var QUY_GOC_DATE   = new Date(2025, 11, 31);  // 31/12/2025 — quỹ gốc cố định
 var KICKOFF_DATE   = new Date(2026, 2, 31);   // 31/03/2026 — ngày tạo GD cân bằng
-var DOICHIEU_FROM  = new Date(2026, 3, 1);    // 01/04/2026 — đối chiếu từng ngày từ đây
+var DOICHIEU_FROM  = new Date(2026, 2, 31);   // 31/03/2026 — verify Kick-Off + đối chiếu từ đây
 // DATE_TO: tự tìm ngày cuối cùng có data trong "Tổng hợp"
 // ────────────────────────────────────────────────────────────
 
@@ -1820,8 +1820,8 @@ function _doiChieuQuy(crmIds) {
     warnSheet.getRange(lr + 1, 1, logRows.length, 6).setValues(logRows);
   }
 
-  // Telegram — group theo KH, hiện từng ngày lệch
-  var khWarnings = {}; // { ma_kh: [{ ngay, lech }] }
+  // Telegram — group theo KH, chỉ hiện ngày đầu tiên lệch (gộp ngày lặp cùng số)
+  var khWarnings = {};
   allWarnings.forEach(function(w) {
     if (!khWarnings[w.ma_kh]) khWarnings[w.ma_kh] = [];
     khWarnings[w.ma_kh].push(w);
@@ -1830,17 +1830,25 @@ function _doiChieuQuy(crmIds) {
   var khCount = Object.keys(khWarnings).length;
   if (khCount > 0) {
     var msg = '⚠️ *Chênh lệch quỹ KH* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n';
-    var keys = Object.keys(khWarnings).sort();
-    keys.forEach(function(mk) {
+    Object.keys(khWarnings).sort().forEach(function(mk) {
       var days = khWarnings[mk];
       msg += '• `' + mk + '`:\n';
-      days.forEach(function(d) {
-        msg += '  ' + d.ngay + ': CRM $' + d.quy_crm.toFixed(2) + ' vs KT $' + d.quy_kt.toFixed(2) + ' (lệch $' + d.lech.toFixed(2) + ')\n';
-      });
+      // Gộp ngày liên tiếp cùng số lệch
+      var i = 0;
+      while (i < days.length) {
+        var start = days[i];
+        var j = i + 1;
+        while (j < days.length && Math.abs(days[j].lech - start.lech) < 0.01) j++;
+        // i→j-1 cùng số lệch
+        if (j - i > 1) {
+          msg += '  ' + start.ngay + '→' + days[j-1].ngay + ': lệch $' + start.lech.toFixed(2) + '\n';
+        } else {
+          msg += '  ' + start.ngay + ': CRM $' + start.quy_crm.toFixed(2) + ' vs KT $' + start.quy_kt.toFixed(2) + ' (lệch $' + start.lech.toFixed(2) + ')\n';
+        }
+        i = j;
+      }
     });
     msg += '\nTổng: ' + khCount + ' KH chênh lệch';
-
-    // _sendTelegram tự chia tin nếu quá dài
     _sendTelegram(msg);
     Logger.log('Đối chiếu KH: ' + khCount + ' KH chênh lệch, ' + allWarnings.length + ' dòng warning');
   } else {
@@ -1968,13 +1976,22 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
   if (nccCount > 0) {
     var msg = '⚠️ *Chênh lệch quỹ NCC* (' + dateCols[0].dateStr + ' → ' + dateCols[dateCols.length-1].dateStr + ')\n\n';
     Object.keys(nccWarnings).sort().forEach(function(mn) {
+      var days = nccWarnings[mn];
       msg += '• `' + mn + '`:\n';
-      nccWarnings[mn].forEach(function(d) {
-        msg += '  ' + d.ngay + ': CRM $' + d.quy_crm.toFixed(2) + ' vs KT $' + d.quy_kt.toFixed(2) + ' (lệch $' + d.lech.toFixed(2) + ')\n';
-      });
+      var i = 0;
+      while (i < days.length) {
+        var start = days[i];
+        var j = i + 1;
+        while (j < days.length && Math.abs(days[j].lech - start.lech) < 0.01) j++;
+        if (j - i > 1) {
+          msg += '  ' + start.ngay + '→' + days[j-1].ngay + ': lệch $' + start.lech.toFixed(2) + '\n';
+        } else {
+          msg += '  ' + start.ngay + ': CRM $' + start.quy_crm.toFixed(2) + ' vs KT $' + start.quy_kt.toFixed(2) + ' (lệch $' + start.lech.toFixed(2) + ')\n';
+        }
+        i = j;
+      }
     });
     msg += '\nTổng: ' + nccCount + ' NCC chênh lệch';
-    // _sendTelegram tự chia tin nếu quá dài
     _sendTelegram(msg);
     Logger.log('Đối chiếu NCC: ' + nccCount + ' NCC chênh lệch');
   } else {
