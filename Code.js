@@ -1084,6 +1084,14 @@ function _createKickOffNCC(crmIds, nccMap) {
     crmNCCAtKickoff[mn2] = quy;
   }
 
+  // DEBUG: log vài NCC
+  var debugNCCs = ['NCC-001','NCC-002','NCC-005'];
+  debugNCCs.forEach(function(dmn) {
+    Logger.log('DEBUG ' + dmn + ': quyGoc=' + (nccQuyGocImport[dmn]||'N/A') +
+      ' crmAtKickoff=' + (crmNCCAtKickoff[dmn]||'N/A') +
+      ' ktMap=' + (ktNCCMap[dmn]||'N/A'));
+  });
+
   var newRows = [];
   var dsRows = [];
   for (var j = 1; j < nccData.length; j++) {
@@ -1095,7 +1103,8 @@ function _createKickOffNCC(crmIds, nccMap) {
     if (Math.abs(diff) < 0.01) continue;
 
     var maGd = _generateMaGD_('GD-NCC', KICKOFF_DATE);
-    var loai = diff > 0 ? 'Nap_quy' : 'Refund';
+    // NCC: dùng Nap_quy (+) hoặc Mua_TK (-), KHÔNG dùng Refund (rút sạch)
+    var loai = diff > 0 ? 'Nap_quy' : 'Mua_TK';
     var soTien = Math.abs(diff);
 
     newRows.push([
@@ -2419,4 +2428,64 @@ function _parseNumber(val) {
   return isNaN(n) ? 0 : n;
 }
 
-// (Audit functions removed — use git history if needed)
+// ============================================================
+// DEBUG — Tạm thời, xoá sau khi fix xong
+// ============================================================
+
+function debugNCC001() {
+  var crmIds = _loadCrmIds_();
+  var nccMap = _readNccMap();
+  var mn = 'NCC-001';
+
+  // 1. Quỹ gốc NCC từ tab Nguồn
+  var quyGocMap = _importQuyGocNCC(crmIds, nccMap) || {};
+  Logger.log('Quỹ gốc NCC-001: ' + (quyGocMap[mn] !== undefined ? quyGocMap[mn] : 'KHÔNG CÓ'));
+
+  // 2. GD NCC-001 trong CRM
+  var ssGD = _openCrm_(crmIds, 'GD_NCC_' + NAM);
+  var sheetGD = ssGD.getSheetByName('GD_NhaCungCap');
+  var gdData = sheetGD ? sheetGD.getDataRange().getValues() : [];
+  var kickoffEnd = new Date(KICKOFF_DATE.getFullYear(), KICKOFF_DATE.getMonth(), KICKOFF_DATE.getDate(), 23, 59, 59);
+
+  var count = 0, countBefore = 0;
+  for (var g = 1; g < gdData.length; g++) {
+    if ((gdData[g][2]||'').toString().trim() !== mn) continue;
+    count++;
+    var ngay = gdData[g][1];
+    var loai = (gdData[g][3]||'').toString().trim();
+    var soTien = parseFloat(gdData[g][5]) || 0;
+    var ghiChu = (gdData[g][16]||'').toString().trim();
+    var isBefore = (ngay instanceof Date && ngay.getTime() <= kickoffEnd.getTime());
+    if (isBefore) countBefore++;
+    Logger.log('  GD ' + count + ': ' + (ngay instanceof Date ? Utilities.formatDate(ngay, TZ, 'dd/MM/yyyy') : ngay) +
+      ' | ' + loai + ' | $' + soTien + ' | ' + (isBefore ? 'BEFORE 31/03' : 'AFTER') + ' | ' + ghiChu);
+  }
+  Logger.log('Total GD NCC-001: ' + count + ' (before 31/03: ' + countBefore + ')');
+
+  // 3. KT tại 31/03 từ tab Nguồn
+  var source = SpreadsheetApp.openById(SOURCE_ID);
+  var sheetNguon = source.getSheetByName(TAB_NGUON);
+  var nguonData = sheetNguon.getDataRange().getValues();
+  var colKO = _findDateCol(nguonData[0], KICKOFF_DATE);
+  Logger.log('Cột 31/03 trong Nguồn: ' + colKO);
+
+  for (var i = 3; i < nguonData.length; i++) {
+    var tenNguon = (nguonData[i][1] || '').toString().trim();
+    var maNcc = _lookupNcc(nccMap, tenNguon);
+    if (maNcc === mn) {
+      var ktVal = colKO >= 0 ? parseFloat(nguonData[i][colKO]) || 0 : 'N/A';
+      Logger.log('NCC-001 trong Nguồn: tên="' + tenNguon + '" KT 31/03=$' + ktVal);
+    }
+  }
+
+  // 4. Quỹ hiện tại trong DanhMuc_NCC
+  var ssNCC = _openCrm_(crmIds, 'NHA_CUNG_CAP');
+  var sheetNCC = ssNCC.getSheetByName('DanhMuc_NCC');
+  var nccData = sheetNCC.getDataRange().getValues();
+  for (var j = 1; j < nccData.length; j++) {
+    if ((nccData[j][0]||'').toString().trim() === mn) {
+      Logger.log('DanhMuc NCC-001: quy_hien_tai=$' + (parseFloat(nccData[j][11])||0));
+      break;
+    }
+  }
+}
