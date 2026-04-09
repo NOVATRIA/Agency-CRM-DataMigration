@@ -2077,7 +2077,7 @@ function _doiChieuQuyNCC(crmIds, nccMap) {
 
   msg += '\nTổng: ' + nccLech31 + ' NCC lệch 31/03, ' + nccLechAfter + ' NCC lệch từ 01/04';
   _sendTelegram(msg);
-  Logger.log('Đối chiếu NCC: ' + nccLech31 + ' lệch 31/03, ' + nccAfterKeys.length + ' lệch từ 01/04');
+  Logger.log('Đối chiếu NCC: ' + nccLech31 + ' lệch 31/03, ' + nccLechAfter + ' lệch từ 01/04');
 }
 
 // ============================================================
